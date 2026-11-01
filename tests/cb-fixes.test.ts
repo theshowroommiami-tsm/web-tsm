@@ -9,7 +9,7 @@ import { validateRequest } from "../shared/cb-schema.ts";
 
 const LEAD = "6f1c0a52-9a3e-4d0b-8f7c-2b5d4e1a9c33";
 const KEY = "3b1f5c2e-8d4a-4b7e-9a21-5f6c7d8e9a0b";
-const valid = { nombre: "Ana", telefono: "+13055550123", marca: "BMW", modelo: "M3", anio: "2020", zona: "33101", servicio: "Full build", descripcion: "Widebody kit" };
+const valid = { nombre: "Ana", telefono: "+13055550123", correo: "ana@example.com", marca: "BMW", modelo: "M3", anio: "2020", zona: "33101", servicio: "Full build", descripcion: "Widebody kit" };
 const read = (f: string) => readFileSync(new URL(`../${f}`, import.meta.url), "utf8");
 
 /** Lo que hace el navegador con los datos del sitio bloqueados: leer window.localStorage lanza. */
@@ -187,4 +187,36 @@ test("EstimateForm: con 'retry' sale del estado de envío y conserva la clave de
   assert.doesNotMatch(block, /claveRef\.current = ""/);        // misma clave: el reintento es un replay
   assert.doesNotMatch(block, /clearDraft\(\)/);                // el borrador (y su clave) sobreviven
   assert.ok(src.indexOf('claveRef.current = ""') > end);       // la clave solo se limpia tras el éxito
+});
+
+// ---- teléfono y correo obligatorios (contrato web-01 v1.1.2)
+
+test("EstimateForm: teléfono y correo van con asterisco, sin el aviso de 'uno de los dos' y con foco al primer error", () => {
+  const src = read("src/components/custom-builds/EstimateForm.tsx");
+  assert.match(src, /k="telefono" label="Phone" required>/);
+  assert.match(src, /k="correo" label="Email" required>/);
+  assert.doesNotMatch(src, /or both/);
+  assert.match(src, /FIELD_ORDER = \["nombre", "telefono", "correo",/); // el foco los alcanza
+});
+
+test("receptor: Code.gs exige teléfono y correo, conserva el aviso de duplicado y su versión es 1.1.2", () => {
+  const gs = read("receptor/apps-script/Code.gs");
+  assert.match(gs, /OBLIGATORIOS = \['nombre', 'telefono', 'correo',/);
+  assert.doesNotMatch(gs, /v\.telefono \|\| v\.correo/);
+  assert.match(gs, /const VERSION = '1\.1\.2';/);
+  assert.match(gs, /Mismo teléfono o correo, misma marca y modelo/); // regla de duplicado, no de obligatorios
+});
+
+test("EstimateForm: el foco al primer error no deja el campo bajo la barra fija", () => {
+  const src = read("src/components/custom-builds/EstimateForm.tsx");
+  const start = src.indexOf("const focusFirstError");
+  const block = src.slice(start, src.indexOf("const onSubmit"));
+  assert.match(block, /focus\(\{ preventScroll: true \}\)/);
+  assert.match(block, /r\.top < 112/);                         // la barra fija llega a unos 97 px
+  assert.match(block, /scrollIntoView\(\{ block: "center" \}\)/);
+});
+
+test("CustomBuilds: la foto de Vision to Reality acompaña al formulario en escritorio", () => {
+  const src = read("src/pages/CustomBuilds.tsx");
+  assert.match(src, /order-last lg:order-none lg:sticky lg:top-28 lg:col-start-1 lg:row-start-2/);
 });

@@ -158,7 +158,54 @@ const CustomBuilds = () => {
             </div>
           </section>
 
-          <EstimateForm />
+          {/* Vision to Reality + formulario de estimado (una sola sección).
+              Orden del DOM: texto, foto, formulario. En móvil y tablet la foto va al final (order-last);
+              desde lg el texto y la foto quedan a la izquierda y el formulario ocupa la columna derecha.
+              El formulario es mucho más alto que el texto: la foto lo acompaña al desplazar (sticky, bajo la barra fija). */}
+          <section className="py-16 miami-bg" aria-labelledby="service-overview">
+            <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+              <div className="grid grid-cols-1 gap-x-12 gap-y-12 items-start lg:gap-y-8 lg:grid-cols-2 lg:grid-rows-[auto_1fr]">
+                <article className="lg:col-start-1 lg:row-start-1">
+                  <h2 id="service-overview" className="text-3xl font-orbitron font-bold mb-6">
+                    <span className="neon-text">Vision to Reality</span>
+                  </h2>
+                  <p className="text-lg text-gray-300 mb-6 leading-relaxed">
+                    Our custom build services transform your vision into reality, whether you're 
+                    looking for performance upgrades, aesthetic modifications, or complete vehicle 
+                    transformations that turn heads on Miami streets.
+                  </p>
+                  <p className="text-lg text-gray-300 mb-8 leading-relaxed">
+                    From luxury interior customizations to high-performance engine modifications, 
+                    we combine artistry with engineering excellence to create automotive masterpieces 
+                    that are truly one-of-a-kind.
+                  </p>
+                  
+                  <a href={BUSINESS_PHONE_HREF} data-call-location="page_body">
+                    <Button size="lg" className="bg-gradient-to-r from-neon-pink to-neon-purple hover:from-neon-purple hover:to-neon-blue text-white font-bold px-8 py-4 rounded-lg neon-border transition-all duration-300">
+                      <Phone className="mr-2" size={20} />
+                      Schedule Consultation
+                    </Button>
+                  </a>
+                </article>
+
+                <div className="relative order-last lg:order-none lg:sticky lg:top-28 lg:col-start-1 lg:row-start-2">
+                  <img 
+                    src="/lovable-uploads/703ad203-a160-4b28-977b-8226419a3191.png" 
+                    alt="Custom automotive build workspace at Showroom Miami showcasing precision craftsmanship and bespoke modifications"
+                    className="w-full h-auto rounded-lg neon-border"
+                    loading="lazy"
+                    width="600"
+                    height="400"
+                  />
+                  <div className="absolute -bottom-6 -right-2 lg:-right-6 bg-gradient-to-r from-neon-pink to-neon-purple p-4 rounded-lg">
+                    <Wrench className="text-white" size={32} />
+                  </div>
+                </div>
+
+                <EstimateForm className="lg:col-start-2 lg:row-start-1 lg:row-span-2" />
+              </div>
+            </div>
+          </section>
 
           {/* Solution Section */}
           <SolutionSection 
@@ -196,50 +243,6 @@ const CustomBuilds = () => {
                     </li>
                   ))}
                 </ul>
-              </div>
-            </div>
-          </section>
-
-          {/* Service Overview - Vision to Reality */}
-          <section className="py-16 miami-bg" aria-labelledby="service-overview">
-            <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-              <div className="grid grid-cols-1 lg:grid-cols-2 gap-12 items-center">
-                <article>
-                  <h2 id="service-overview" className="text-3xl font-orbitron font-bold mb-6">
-                    <span className="neon-text">Vision to Reality</span>
-                  </h2>
-                  <p className="text-lg text-gray-300 mb-6 leading-relaxed">
-                    Our custom build services transform your vision into reality, whether you're 
-                    looking for performance upgrades, aesthetic modifications, or complete vehicle 
-                    transformations that turn heads on Miami streets.
-                  </p>
-                  <p className="text-lg text-gray-300 mb-8 leading-relaxed">
-                    From luxury interior customizations to high-performance engine modifications, 
-                    we combine artistry with engineering excellence to create automotive masterpieces 
-                    that are truly one-of-a-kind.
-                  </p>
-                  
-                  <a href={BUSINESS_PHONE_HREF} data-call-location="page_body">
-                    <Button size="lg" className="bg-gradient-to-r from-neon-pink to-neon-purple hover:from-neon-purple hover:to-neon-blue text-white font-bold px-8 py-4 rounded-lg neon-border transition-all duration-300">
-                      <Phone className="mr-2" size={20} />
-                      Schedule Consultation
-                    </Button>
-                  </a>
-                </article>
-                
-                <div className="relative">
-                  <img 
-                    src="/lovable-uploads/703ad203-a160-4b28-977b-8226419a3191.png" 
-                    alt="Custom automotive build workspace at Showroom Miami showcasing precision craftsmanship and bespoke modifications"
-                    className="rounded-lg neon-border"
-                    loading="eager"
-                    width="600"
-                    height="400"
-                  />
-                  <div className="absolute -bottom-6 -right-6 bg-gradient-to-r from-neon-pink to-neon-purple p-4 rounded-lg">
-                    <Wrench className="text-white" size={32} />
-                  </div>
-                </div>
               </div>
             </div>
           </section>

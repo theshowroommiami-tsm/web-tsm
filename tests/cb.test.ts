@@ -9,16 +9,41 @@ import { verifyTurnstile, TURNSTILE_TEST_SECRET } from "../netlify/lib/turnstile
 import { handleRequest, handlePhotoUrls, handlePhotosDone, type Deps, type R2Client } from "../netlify/lib/handlers.ts";
 
 const KEY = "3b1f5c2e-8d4a-4b7e-9a21-5f6c7d8e9a0b";
-const valid = { nombre: "Ana", telefono: "+13055550123", marca: "BMW", modelo: "M3", anio: "2020", zona: "33101", servicio: "Full build", descripcion: "Widebody kit\nand paint" };
+const valid = { nombre: "Ana", telefono: "+13055550123", correo: "ana@example.com", marca: "BMW", modelo: "M3", anio: "2020", zona: "33101", servicio: "Full build", descripcion: "Widebody kit\nand paint" };
 const NOW = 1_800_000_000;
 
 // ---- esquema
-test("schema: válido, y teléfono o correo obligatorio", () => {
-  assert.equal(validateRequest(valid).ok, true);
-  const { telefono, ...sin } = valid;
-  const r = validateRequest(sin);
-  assert.equal(r.ok, false);
-  assert.equal(validateRequest({ ...sin, correo: "a@b.co" }).ok, true);
+test("schema: teléfono y correo obligatorios", () => {
+  assert.equal(validateRequest(valid).ok, true); // ambos válidos
+  const { telefono, correo, ...base } = valid;
+  const sinTel = validateRequest({ ...base, correo });
+  assert.equal(sinTel.ok, false);
+  assert.deepEqual(sinTel.errors, { telefono: "Enter your phone number." });
+  const sinCorreo = validateRequest({ ...base, telefono });
+  assert.equal(sinCorreo.ok, false);
+  assert.deepEqual(sinCorreo.errors, { correo: "Enter your email address." });
+  const ninguno = validateRequest(base);
+  assert.equal(ninguno.ok, false);
+  assert.deepEqual(ninguno.errors, { telefono: "Enter your phone number.", correo: "Enter your email address." });
+  const blancos = validateRequest({ ...base, telefono: "   ", correo: " \t " });
+  assert.equal(blancos.ok, false);
+  assert.deepEqual(blancos.errors, { telefono: "Enter your phone number.", correo: "Enter your email address." });
+  const correoMalo = validateRequest({ ...valid, correo: "ana@" });
+  assert.equal(correoMalo.ok, false);
+  assert.deepEqual(correoMalo.errors, { correo: "Enter a valid email address." });
+  const telMalo = validateRequest({ ...valid, telefono: "3055550123" });
+  assert.equal(telMalo.ok, false);
+  assert.deepEqual(telMalo.errors, { telefono: "Enter a valid phone number." });
+  // Teléfonos inventados: pasar el E.164 no basta (si no, dos falsos iguales marcarían un duplicado y apagarían la medición)
+  for (const falso of ["0000000000", "1111111111", "5555555555", "1234567890", "+10000000000", "+15555555555", "+17777777777", "+4444444444"]) {
+    const r = validateRequest({ ...valid, telefono: normalizePhone(falso) || falso });
+    assert.equal(r.ok, false, falso);
+    assert.deepEqual(r.errors, { telefono: "Enter a valid phone number." }, falso);
+  }
+  // Los reales siguen pasando: US en cualquier formato, y números de otro país con "+"
+  for (const real of ["(305) 555-0123", "1 786 555 0199", "+13055550123", "+442079460958", "+521551234567"]) {
+    assert.equal(validateRequest({ ...valid, telefono: normalizePhone(real) }).ok, true, real);
+  }
 });
 test("schema: largos, año, E.164, enums y tipos", () => {
   assert.equal(validateRequest({ ...valid, nombre: "x".repeat(121) }).ok, false);
@@ -151,6 +176,22 @@ test("cb-request: duplicado => medir false; sin fotos => sin permiso", async () 
   assert.equal(dup.medir, false);
   const none = await (await handleRequest(post({ ...reqBody, fotos_esperadas: 0 }), mkDeps({ receptorReply: { ok: true, lead_id: "L", carpeta: "", duplicado: false, fotos_esperadas: 0 } }))).json();
   assert.equal(none.permiso, null);
+});
+test("cb-request: teléfono y correo obligatorios => 400 sin llamar al receptor ni emitir lead", async () => {
+  const { telefono, correo, ...base } = valid;
+  for (const [campos, falta] of [[{ ...base, telefono }, "correo"], [{ ...base, correo }, "telefono"]] as const) {
+    const d = mkDeps();
+    let fetched = 0;
+    const inner = d.fetchImpl!;
+    d.fetchImpl = ((...a: Parameters<typeof fetch>) => { fetched++; return inner(...a); }) as typeof fetch;
+    const res = await handleRequest(post({ ...reqBody, campos }), d);
+    assert.equal(res.status, 400);
+    const j = await res.json();
+    assert.deepEqual(j, { error: "invalid", campos: [falta] });
+    assert.ok(!("lead_id" in j) && !("permiso" in j)); // no hay lead que medir
+    assert.equal(fetched, 0); // ni Turnstile ni receptor
+    assert.equal(d.calls.length, 0);
+  }
 });
 test("cb-request: 400, 403, 405, 500 y errores del receptor", async () => {
   assert.equal((await handleRequest(post({ ...reqBody, campos: { ...valid, nombre: "" } }), mkDeps())).status, 400);

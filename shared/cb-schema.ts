@@ -1,5 +1,6 @@
-// Esquema único de la solicitud de Custom Builds (contrato web-01 v1.1.1, §3).
+// Esquema único de la solicitud de Custom Builds (contrato web-01 v1.1.2, §3).
 // Lo importan el navegador y las Netlify Functions: no depende de DOM ni de Node.
+// Desde v1.1.2 el teléfono y el correo son obligatorios, cada uno con su formato válido.
 
 export const MAX_LEN = {
   nombre: 120, telefono: 40, correo: 160, marca: 60, modelo: 80, anio: 4,
@@ -34,7 +35,7 @@ export const MAX_PHOTOS = 3;
 export const MAX_PHOTO_BYTES = 3 * 1024 * 1024;
 
 export type CbFields = {
-  nombre: string; telefono?: string; correo?: string; marca: string; modelo: string;
+  nombre: string; telefono: string; correo: string; marca: string; modelo: string;
   anio: string; zona: string; servicio: string; descripcion: string;
   presupuesto?: string; plazo?: string; origen?: string;
   utm_source?: string; utm_medium?: string; utm_campaign?: string; utm_term?: string;
@@ -50,6 +51,7 @@ export const isUuidV4 = (v: unknown): v is string => typeof v === "string" && UU
 
 const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
 const E164 = /^\+[1-9]\d{7,14}$/;
+const NANP = /^\+1[2-9]\d{2}[2-9]\d{6}$/;
 
 /** Normaliza a E.164. US de 10 u 11 dígitos pasa a +1...; con "+" se respeta. Devuelve "" si no se puede. */
 export function normalizePhone(raw: string): string {
@@ -60,6 +62,19 @@ export function normalizePhone(raw: string): string {
   if (digits.length === 10) return "+1" + digits;
   if (digits.length === 11 && digits.startsWith("1")) return "+" + digits;
   return "";
+}
+
+/**
+ * E.164 válido y que no sea un número inventado. Con el teléfono obligatorio, quien no quiere darlo escribe
+ * 0000000000 o 5555555555; dos personas con el mismo número falso y el mismo auto en 24 h se marcarían como
+ * duplicado y no se mediría el lead. Todo +1 es plan NANP: el código de área y la central empiezan en 2 a 9
+ * (rechaza 0000000000 y 1234567890), y un número de un solo dígito repetido nunca es real.
+ */
+function isRealPhone(p: string): boolean {
+  if (!E164.test(p)) return false;
+  const national = p.startsWith("+1") ? p.slice(2) : p.slice(1);
+  if (/^(\d)\1+$/.test(national)) return false;
+  return !p.startsWith("+1") || NANP.test(p);
 }
 
 const str = (v: unknown) => (typeof v === "string" ? v.trim() : "");
@@ -82,7 +97,8 @@ export function validateRequest(input: unknown): ValidationResult {
   }
 
   const required: [string, string][] = [
-    ["nombre", "Enter your name."], ["marca", "Select a brand."], ["modelo", "Enter the model."],
+    ["nombre", "Enter your name."], ["telefono", "Enter your phone number."],
+    ["correo", "Enter your email address."], ["marca", "Select a brand."], ["modelo", "Enter the model."],
     ["anio", "Enter the 4-digit year."], ["zona", "Enter your city or ZIP."],
     ["servicio", "Select the service."], ["descripcion", "Describe your project."],
   ];
@@ -94,15 +110,11 @@ export function validateRequest(input: unknown): ValidationResult {
       errors.anio = "Enter a valid 4-digit year.";
     }
   }
-  if (data.telefono && !errors.telefono && !E164.test(data.telefono)) {
+  if (data.telefono && !errors.telefono && !isRealPhone(data.telefono)) {
     errors.telefono = "Enter a valid phone number.";
   }
   if (data.correo && !errors.correo && !EMAIL.test(data.correo)) {
     errors.correo = "Enter a valid email address.";
-  }
-  if (!data.telefono && !data.correo && !errors.telefono && !errors.correo) {
-    errors.telefono = "Enter a phone number or an email address.";
-    errors.correo = "Enter a phone number or an email address.";
   }
   if (data.origen && !(ORIGINS as readonly string[]).includes(data.origen)) errors.origen = "Invalid value.";
   if (data.click_id_tipo && !(CLICK_ID_TYPES as readonly string[]).includes(data.click_id_tipo)) {

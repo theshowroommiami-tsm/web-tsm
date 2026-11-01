@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
+import { cn } from "@/lib/utils";
 import {
   BRANDS, BUDGETS, MAX_LEN, MAX_PHOTOS, SERVICES, TIMELINES,
   normalizePhone, validateRequest, type CbFields,
@@ -26,6 +27,11 @@ declare global {
 
 type Status = "idle" | "sending" | "uploading" | "done";
 const FIELD_ORDER = ["nombre", "telefono", "correo", "marca", "modelo", "anio", "zona", "servicio", "descripcion"];
+// Parejas de campos. Ningún campo baja de 160 px: el formulario ocupa todo el ancho hasta lg y media columna
+// desde lg (390 px útiles en 1024, 518 px desde 1280), así que entre lg y xl cada pareja pasa a una columna.
+// Teléfono y correo solo van en pareja desde md: un correo de 30 caracteres necesita unos 245 px.
+const CONTACT = "grid gap-5 md:grid-cols-2 lg:grid-cols-1";
+const PAIR = "grid gap-5 sm:grid-cols-2 lg:grid-cols-1 xl:grid-cols-2";
 const inputCls =
   "w-full rounded-md border border-neon-purple/40 bg-background px-3 py-2 text-white placeholder:text-gray-500 focus:outline-none focus:ring-2 focus:ring-neon-cyan";
 
@@ -57,7 +63,8 @@ const FieldWrap = ({ k, label, required, error, children }: { k: string; label: 
   </div>
 );
 
-const EstimateForm = () => {
+/** Columna del formulario. La página decide su lugar en la cuadrícula (className); el ancla #estimate es esta sección. */
+const EstimateForm = ({ className }: { className?: string }) => {
   const [fields, setFields] = useState<Record<string, string>>({});
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [photos, setPhotos] = useState<ProcessedPhoto[]>([]);
@@ -123,7 +130,13 @@ const EstimateForm = () => {
 
   const focusFirstError = (errs: Record<string, string>) => {
     const first = FIELD_ORDER.find((k) => errs[k]);
-    if (first) formRef.current?.querySelector<HTMLElement>(`[name="${first}"]`)?.focus();
+    const el = first ? formRef.current?.querySelector<HTMLElement>(`[name="${first}"]`) : null;
+    if (!el) return;
+    el.focus({ preventScroll: true });
+    // La barra fija llega a unos 97 px. Si el campo quedó debajo de ella (el navegador no desplaza porque ya está
+    // dentro de la ventana) o con su mensaje fuera de la vista, se centra.
+    const r = el.getBoundingClientRect();
+    if (r.top < 112 || r.bottom + 40 > window.innerHeight) el.scrollIntoView({ block: "center" });
   };
 
   const onSubmit = async (e: React.FormEvent) => {
@@ -184,74 +197,71 @@ const EstimateForm = () => {
   );
 
   return (
-    <section id={ESTIMATE_SECTION_ID} className="py-16 scroll-mt-28" aria-labelledby={ESTIMATE_HEADING_ID}>
-      <div className="max-w-3xl mx-auto px-4 sm:px-6 lg:px-8">
-        <h2 id={ESTIMATE_HEADING_ID} tabIndex={-1} className="text-3xl font-orbitron font-bold mb-3 text-center focus:outline-none">
-          <span className="neon-text">Request a Custom Build Estimate</span>
-        </h2>
-        <p className="text-gray-300 text-center mb-8">Tell us about your vehicle and your project. We reply within one business day.</p>
+    <section id={ESTIMATE_SECTION_ID} className={cn("min-w-0 scroll-mt-28", className)} aria-labelledby={ESTIMATE_HEADING_ID}>
+      <h2 id={ESTIMATE_HEADING_ID} tabIndex={-1} className="text-3xl font-orbitron font-bold mb-3 focus:outline-none">
+        <span className="neon-text">Request a Custom Build Estimate</span>
+      </h2>
+      <p className="text-gray-300 mb-8">Tell us about your vehicle and your project. We reply within one business day.</p>
 
-        <div aria-live="polite" role="status" className="mb-4 min-h-[1.5rem]">
-          {status === "uploading" && <p className="text-neon-cyan">Uploading your photos, please keep this page open</p>}
-          {status === "sending" && <p className="text-neon-cyan">Sending your request…</p>}
-          {status !== "done" && notice && <p className="text-red-400">{notice}</p>}
-        </div>
-
-        {status === "done" ? (
-          <div className="rounded-lg border border-neon-green/50 bg-card p-8 text-center">
-            <h3 className="text-2xl font-orbitron font-bold text-white mb-2">Request received</h3>
-            <p className="text-gray-300">Thank you. Our team will contact you within one business day.</p>
-            {notice && <p className="text-gray-400 mt-3">{notice}</p>}
-          </div>
-        ) : (
-          <form ref={formRef} onSubmit={onSubmit} noValidate className="space-y-5 rounded-lg border border-neon-purple/30 bg-card p-6 sm:p-8">
-            <FieldWrap error={errors.nombre} k="nombre" label="Full name" required><input type="text" autoComplete="name" {...common("nombre")} /></FieldWrap>
-            <p className="text-sm text-gray-400">Enter a phone number, an email address, or both.</p>
-            <div className="grid sm:grid-cols-2 gap-5">
-              <FieldWrap error={errors.telefono} k="telefono" label="Phone"><input type="tel" autoComplete="tel" inputMode="tel" {...common("telefono")} /></FieldWrap>
-              <FieldWrap error={errors.correo} k="correo" label="Email"><input type="email" autoComplete="email" {...common("correo")} /></FieldWrap>
-            </div>
-            <div className="grid sm:grid-cols-3 gap-5">
-              <FieldWrap error={errors.marca} k="marca" label="Make" required>{select("marca", BRANDS)}</FieldWrap>
-              <FieldWrap error={errors.modelo} k="modelo" label="Model" required><input type="text" {...common("modelo")} /></FieldWrap>
-              <FieldWrap error={errors.anio} k="anio" label="Year" required><input type="text" inputMode="numeric" {...common("anio")} /></FieldWrap>
-            </div>
-            <FieldWrap error={errors.zona} k="zona" label="City or ZIP" required><input type="text" autoComplete="postal-code" {...common("zona")} /></FieldWrap>
-            <FieldWrap error={errors.servicio} k="servicio" label="Service" required>{select("servicio", SERVICES)}</FieldWrap>
-            <FieldWrap error={errors.descripcion} k="descripcion" label="Describe your project" required><textarea rows={5} {...(common("descripcion") as React.TextareaHTMLAttributes<HTMLTextAreaElement>)} /></FieldWrap>
-            <div className="grid sm:grid-cols-2 gap-5">
-              <FieldWrap error={errors.presupuesto} k="presupuesto" label="Budget">{select("presupuesto", BUDGETS)}</FieldWrap>
-              <FieldWrap error={errors.plazo} k="plazo" label="Timeline">{select("plazo", TIMELINES)}</FieldWrap>
-            </div>
-
-            <div>
-              <label htmlFor="cb-fotos" className="block text-sm font-medium text-gray-200 mb-1">
-                Photos <span className="text-gray-400">(optional, up to {MAX_PHOTOS})</span>
-              </label>
-              <input id="cb-fotos" type="file" accept="image/*" multiple onChange={onFiles}
-                disabled={busy || photos.length >= MAX_PHOTOS} className="block w-full text-sm text-gray-300" aria-describedby="cb-fotos-msg" />
-              <p id="cb-fotos-msg" className="mt-1 text-sm text-red-400" aria-live="polite">{photoMsg}</p>
-              {photos.length > 0 && (
-                <ul className="mt-3 flex gap-3 flex-wrap">
-                  {photos.map((p, i) => (
-                    <li key={p.previewUrl} className="relative">
-                      <img src={p.previewUrl} alt={`Selected photo ${i + 1}`} className="h-20 w-20 rounded object-cover" />
-                      <button type="button" onClick={() => removePhoto(i)} disabled={busy}
-                        aria-label={`Remove photo ${i + 1}`} className="absolute -top-2 -right-2 h-6 w-6 rounded-full bg-black text-white text-sm">×</button>
-                    </li>
-                  ))}
-                </ul>
-              )}
-            </div>
-
-            <div ref={tsEl} />
-            <Button type="submit" size="lg" disabled={busy} aria-disabled={busy}
-              className="w-full bg-gradient-to-r from-neon-pink to-neon-purple text-white font-bold">
-              {busy ? "Sending…" : "Request Estimate"}
-            </Button>
-          </form>
-        )}
+      <div aria-live="polite" role="status" className="mb-4 min-h-[1.5rem]">
+        {status === "uploading" && <p className="text-neon-cyan">Uploading your photos, please keep this page open</p>}
+        {status === "sending" && <p className="text-neon-cyan">Sending your request…</p>}
+        {status !== "done" && notice && <p className="text-red-400">{notice}</p>}
       </div>
+
+      {status === "done" ? (
+        <div className="rounded-lg border border-neon-green/50 bg-card p-8 text-center">
+          <h3 className="text-2xl font-orbitron font-bold text-white mb-2">Request received</h3>
+          <p className="text-gray-300">Thank you. Our team will contact you within one business day.</p>
+          {notice && <p className="text-gray-400 mt-3">{notice}</p>}
+        </div>
+      ) : (
+        <form ref={formRef} onSubmit={onSubmit} noValidate className="space-y-5 rounded-lg border border-neon-purple/30 bg-card p-4 min-[400px]:p-6 sm:p-8">
+          <FieldWrap error={errors.nombre} k="nombre" label="Full name" required><input type="text" autoComplete="name" {...common("nombre")} /></FieldWrap>
+          <div className={CONTACT}>
+            <FieldWrap error={errors.telefono} k="telefono" label="Phone" required><input type="tel" autoComplete="tel" inputMode="tel" {...common("telefono")} /></FieldWrap>
+            <FieldWrap error={errors.correo} k="correo" label="Email" required><input type="email" autoComplete="email" {...common("correo")} /></FieldWrap>
+          </div>
+          <FieldWrap error={errors.marca} k="marca" label="Make" required>{select("marca", BRANDS)}</FieldWrap>
+          <div className={PAIR}>
+            <FieldWrap error={errors.modelo} k="modelo" label="Model" required><input type="text" {...common("modelo")} /></FieldWrap>
+            <FieldWrap error={errors.anio} k="anio" label="Year" required><input type="text" inputMode="numeric" {...common("anio")} /></FieldWrap>
+          </div>
+          <FieldWrap error={errors.zona} k="zona" label="City or ZIP" required><input type="text" autoComplete="postal-code" {...common("zona")} /></FieldWrap>
+          <FieldWrap error={errors.servicio} k="servicio" label="Service" required>{select("servicio", SERVICES)}</FieldWrap>
+          <FieldWrap error={errors.descripcion} k="descripcion" label="Describe your project" required><textarea rows={5} {...(common("descripcion") as React.TextareaHTMLAttributes<HTMLTextAreaElement>)} /></FieldWrap>
+          <div className={PAIR}>
+            <FieldWrap error={errors.presupuesto} k="presupuesto" label="Budget">{select("presupuesto", BUDGETS)}</FieldWrap>
+            <FieldWrap error={errors.plazo} k="plazo" label="Timeline">{select("plazo", TIMELINES)}</FieldWrap>
+          </div>
+
+          <div>
+            <label htmlFor="cb-fotos" className="block text-sm font-medium text-gray-200 mb-1">
+              Photos <span className="text-gray-400">(optional, up to {MAX_PHOTOS})</span>
+            </label>
+            <input id="cb-fotos" type="file" accept="image/*" multiple onChange={onFiles}
+              disabled={busy || photos.length >= MAX_PHOTOS} className="block w-full text-sm text-gray-300" aria-describedby="cb-fotos-msg" />
+            <p id="cb-fotos-msg" className="mt-1 text-sm text-red-400" aria-live="polite">{photoMsg}</p>
+            {photos.length > 0 && (
+              <ul className="mt-3 flex gap-3 flex-wrap">
+                {photos.map((p, i) => (
+                  <li key={p.previewUrl} className="relative">
+                    <img src={p.previewUrl} alt={`Selected photo ${i + 1}`} className="h-20 w-20 rounded object-cover" />
+                    <button type="button" onClick={() => removePhoto(i)} disabled={busy}
+                      aria-label={`Remove photo ${i + 1}`} className="absolute -top-2 -right-2 h-6 w-6 rounded-full bg-black text-white text-sm">×</button>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+
+          <div ref={tsEl} />
+          <Button type="submit" size="lg" disabled={busy} aria-disabled={busy}
+            className="w-full bg-gradient-to-r from-neon-pink to-neon-purple text-white font-bold">
+            {busy ? "Sending…" : "Request Estimate"}
+          </Button>
+        </form>
+      )}
     </section>
   );
 };

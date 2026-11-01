@@ -1,5 +1,5 @@
 /**
- * Receptor temporal de Custom Builds · TSM · 2026-11-01 · v1.1.1
+ * Receptor temporal de Custom Builds · TSM · 2026-11-01 · v1.1.2
  *
  * Proyecto independiente de Apps Script (script.new), propiedad de
  * liza@showroommiami.com y sin compartir. Escribe en una planilla aparte que sí
@@ -22,7 +22,7 @@
  *   ID_PLANILLA                          la crea setup()
  */
 
-const VERSION = '1.1.1';
+const VERSION = '1.1.2';
 const ZONA = 'America/New_York';
 const RESPONSABLE = 'John';
 const NOMBRE_PLANILLA = 'TSM · Custom Builds · Requests (temporal)';
@@ -92,7 +92,7 @@ const CAMPOS = {
   utm_term: 160, utm_content: 160, click_id_tipo: 10, click_id: 200,
   aterrizaje: 300, referrer: 200,
 };
-const OBLIGATORIOS = ['nombre', 'marca', 'modelo', 'anio', 'zona', 'servicio', 'descripcion'];
+const OBLIGATORIOS = ['nombre', 'telefono', 'correo', 'marca', 'modelo', 'anio', 'zona', 'servicio', 'descripcion'];
 
 // ---------------------------------------------------------------- web app
 
@@ -188,7 +188,7 @@ function crear_(hoja, entorno, d) {
     v[k] = limpio.trim().slice(0, CAMPOS[k]);
   });
   const faltan = OBLIGATORIOS.filter(function (k) { return !v[k]; });
-  if (faltan.length || !(v.telefono || v.correo)) return { ok: false, error: 'datos' };
+  if (faltan.length) return { ok: false, error: 'datos' };
 
   const esperadas = Math.max(0, Math.min(3, Math.floor(Number(d.fotos_esperadas) || 0)));
   if (entorno === 'preview') contador_('CUPO_PREVIEW', true);
