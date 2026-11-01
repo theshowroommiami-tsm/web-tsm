@@ -493,3 +493,327 @@ test("A9: la atribución guardada se aplica con recordAttribution al aterrizar, 
   const s = mem(); saveAttribution(s.store, UTM, 7);
   assert.equal(stored(s.m).savedAt, 7);
 });
+
+// =====================================================================================================================
+// Bloque B · robustez de fotos, red y despliegue
+// =====================================================================================================================
+
+import { existsSync } from "node:fs";
+import { CB_TIMEOUTS, loadDraft, postRequest, uploadPhotos } from "../src/lib/cbClient.ts";
+import { decodeImage, type ProcessedPhoto } from "../src/lib/cbPhotos.ts";
+import { BODY_MAX } from "../netlify/lib/handlers.ts";
+import { callReceptor } from "../netlify/lib/receptor.ts";
+import { MAX_THUMB_CHARS, isValidEmail } from "../shared/cb-schema.ts";
+
+// ---- B1 · fotos de iPhone
+
+test("B1: createImageBitmap con from-image y, si el motor lo rechaza, un reintento sin opciones", async () => {
+  const g = globalThis as { createImageBitmap?: unknown };
+  const had = g.createImageBitmap;
+  const calls: unknown[][] = [];
+  try {
+    g.createImageBitmap = async (...a: unknown[]) => { calls.push(a); if (a[1]) throw new TypeError("from-image no soportado"); return { width: 1, height: 1 }; };
+    const file = new Blob(["x"]);
+    const bmp = await decodeImage(file);
+    assert.deepEqual(bmp, { width: 1, height: 1 });
+    assert.equal(calls.length, 2);
+    assert.deepEqual(calls[0][1], { imageOrientation: "from-image" }); // primero respeta la orientación EXIF
+    assert.equal(calls[1].length, 1);                                  // y reintenta sin opciones
+
+    calls.length = 0;
+    g.createImageBitmap = async (...a: unknown[]) => { calls.push(a); return { width: 2, height: 2 }; };
+    await decodeImage(file);
+    assert.equal(calls.length, 1); // si la primera funciona, no hay reintento
+
+    g.createImageBitmap = async () => { throw new DOMException("no es una imagen", "InvalidStateError"); };
+    await assert.rejects(() => decodeImage(file), /no es una imagen/); // un archivo que no es imagen sigue fallando
+  } finally { if (had === undefined) delete g.createImageBitmap; else g.createImageBitmap = had; }
+  assert.match(read("src/lib/cbPhotos.ts"), /const bmp = await decodeImage\(file\)/);
+});
+
+// ---- B2 · subida de fotos: tiempos y fallos parciales
+
+const BLOB = () => new Blob([new Uint8Array(100)], { type: "image/jpeg" });
+const photo = (i: number, thumb = `/9j/T${i}`): ProcessedPhoto => ({ name: `f${i}.jpg`, blob: BLOB(), thumb, previewUrl: `blob:${i}` });
+const URLS = { urls: [1, 2, 3].map((n) => ({ n, url: `https://r2.example/foto-${n}.jpg?sig=${n}` })) };
+const FAST = { request: 50, photoUrls: 50, put: 50, photosDone: 50 };
+
+type Hit = { url: string; method: string; body?: unknown; aborted: () => boolean };
+function stubUpload(opts: { put?: (n: number) => Response | Promise<Response>; urls?: () => Response | Promise<Response>; done?: () => Response | Promise<Response> }) {
+  const real = globalThis.fetch;
+  const hits: Hit[] = [];
+  globalThis.fetch = (async (url: string, init: RequestInit) => {
+    hits.push({ url, method: init.method ?? "GET", body: typeof init.body === "string" ? JSON.parse(init.body) : undefined, aborted: () => !!init.signal?.aborted });
+    if (url === "/api/cb-photo-urls") return opts.urls ? opts.urls() : new Response(JSON.stringify(URLS));
+    if (url === "/api/cb-photos-done") return opts.done ? opts.done() : new Response(JSON.stringify({ fotos: (hits.find((h) => h.url === "/api/cb-photos-done")!.body as { fotos: unknown[] }).fotos.length }));
+    if (init.method === "PUT") return opts.put ? opts.put(Number(/foto-(\d)/.exec(url)![1])) : new Response(null, { status: 200 });
+    throw new Error(`fetch inesperado: ${url}`);
+  }) as typeof fetch;
+  return { hits, restore: () => { globalThis.fetch = real; } };
+}
+const hangUntilAborted = (init: RequestInit) => new Promise<Response>((_r, reject) => init.signal!.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError"))));
+
+test("B2: una foto caída no aborta las demás; cb-photos-done recibe solo las que subieron", async () => {
+  const s = stubUpload({ put: (n) => { if (n === 2) throw new TypeError("Failed to fetch"); return new Response(null, { status: 200 }); } });
+  try {
+    const ok = await uploadPhotos("a.b", [photo(1), photo(2), photo(3)], FAST);
+    assert.equal(ok, 2);
+    assert.equal(s.hits.filter((h) => h.method === "PUT").length, 3); // la 3 se intentó aunque la 2 cayó
+    const done = s.hits.find((h) => h.url === "/api/cb-photos-done")!;
+    assert.deepEqual(done.body, { permiso: "a.b", fotos: [{ n: 1, miniatura: "/9j/T1" }, { n: 3, miniatura: "/9j/T3" }] });
+  } finally { s.restore(); }
+});
+
+test("B2: un PUT colgado se aborta a su tiempo y no deja el formulario esperando", async () => {
+  const real = globalThis.fetch;
+  const s = stubUpload({});
+  const inner = globalThis.fetch;
+  let putAbort: Hit["aborted"] | undefined;
+  globalThis.fetch = (async (url: string, init: RequestInit) => {
+    if (init.method === "PUT" && String(url).includes("foto-1")) { putAbort = () => init.signal!.aborted; return hangUntilAborted(init); }
+    return inner(url, init);
+  }) as typeof fetch;
+  try {
+    const t0 = Date.now();
+    const ok = await uploadPhotos("a.b", [photo(1), photo(2)], FAST);
+    assert.equal(ok, 1);
+    assert.ok(Date.now() - t0 < 2000, "no espera más que el tiempo del PUT");
+    assert.equal(putAbort?.(), true);
+    assert.deepEqual((s.hits.find((h) => h.url === "/api/cb-photos-done")!.body as { fotos: { n: number }[] }).fotos.map((f) => f.n), [2]);
+  } finally { s.restore(); globalThis.fetch = real; }
+});
+
+test("B2: si ninguna foto sube, devuelve 0 y no llama a cb-photos-done; un PUT con error HTTP tampoco cuenta", async () => {
+  let s = stubUpload({ put: () => { throw new TypeError("network"); } });
+  try {
+    assert.equal(await uploadPhotos("a.b", [photo(1), photo(2)], FAST), 0);
+    assert.ok(!s.hits.some((h) => h.url === "/api/cb-photos-done"));
+  } finally { s.restore(); }
+  s = stubUpload({ put: (n) => new Response(null, { status: n === 1 ? 403 : 200 }) });
+  try {
+    assert.equal(await uploadPhotos("a.b", [photo(1), photo(2)], FAST), 1);
+  } finally { s.restore(); }
+});
+
+test("B2: sin miniatura la foto viaja solo con n; los POST con error o sin cuerpo utilizable lanzan", async () => {
+  let s = stubUpload({});
+  try {
+    await uploadPhotos("a.b", [photo(1, "")], FAST);
+    assert.deepEqual((s.hits.find((h) => h.url === "/api/cb-photos-done")!.body as { fotos: unknown[] }).fotos, [{ n: 1 }]);
+  } finally { s.restore(); }
+  s = stubUpload({ urls: () => new Response("{}", { status: 503 }) });
+  try { await assert.rejects(() => uploadPhotos("a.b", [photo(1)], FAST), /urls/); } finally { s.restore(); }
+  s = stubUpload({ urls: () => new Response("no es json", { status: 200 }) });
+  try { await assert.rejects(() => uploadPhotos("a.b", [photo(1)], FAST), /urls/); } finally { s.restore(); }
+  s = stubUpload({ done: () => new Response("{}", { status: 400 }) });
+  try { await assert.rejects(() => uploadPhotos("a.b", [photo(1)], FAST), /done/); } finally { s.restore(); }
+});
+
+test("B2: los POST de fotos también tienen tiempo máximo", async () => {
+  const real = globalThis.fetch;
+  globalThis.fetch = ((_u: string, init: RequestInit) => hangUntilAborted(init)) as typeof fetch;
+  try { await assert.rejects(() => uploadPhotos("a.b", [photo(1)], FAST)); } finally { globalThis.fetch = real; }
+  // los tiempos del navegador caben en las ventanas del PUT prefirmado (300 s) y del permiso (15 min)
+  assert.ok(CB_TIMEOUTS.put * 3 < 300_000);
+  assert.ok(CB_TIMEOUTS.photoUrls + CB_TIMEOUTS.put * 3 + CB_TIMEOUTS.photosDone < 15 * 60_000);
+  assert.ok(CB_TIMEOUTS.request > 16_000, "más que el peor caso de la Function (Turnstile 8 s + receptor 8 s)");
+});
+
+// ---- B3 · 502 y 504 son reintentables
+
+test("B3: 502 y 504 se tratan como retry, igual que 503; el tiempo vencido también", async () => {
+  const real = globalThis.fetch;
+  try {
+    for (const status of [502, 503, 504]) {
+      globalThis.fetch = (async () => new Response("<html>gateway</html>", { status })) as typeof fetch;
+      assert.deepEqual(await postRequest(KEY, "tok", {}, 0), { kind: "retry" }, String(status));
+    }
+    globalThis.fetch = (async () => new Response("", { status: 500 })) as typeof fetch;
+    assert.deepEqual(await postRequest(KEY, "tok", {}, 0), { kind: "error" }); // 500 sigue siendo terminal
+    globalThis.fetch = ((_u: string, init: RequestInit) => hangUntilAborted(init)) as typeof fetch;
+    assert.deepEqual(await postRequest(KEY, "tok", {}, 0, 30), { kind: "retry" }); // la Function no contestó a tiempo
+  } finally { globalThis.fetch = real; }
+});
+
+// ---- B5 · tope del cuerpo de cb-photos-done
+
+test("B5: cb-photos-done acepta 3 miniaturas de 200.000 caracteres (lo que permite el contrato) y rechaza lo que lo excede", async () => {
+  assert.equal(MAX_THUMB_CHARS, 200_000);
+  assert.equal(BODY_MAX.photosDone, 3 * 200_000 + 4_000);
+  assert.equal(BODY_MAX.request, 400_000); // las otras dos no cambian
+  const jpeg = new Uint8Array([0xff, 0xd8, 0xff, 0]);
+  const dir = "solicitudes/TEST-0001-aaaaaaaa/";
+  const files = { [`${dir}foto-1.jpg`]: jpeg, [`${dir}foto-2.jpg`]: jpeg, [`${dir}foto-3.jpg`]: jpeg };
+  const thumb = "/9j/" + "A".repeat(MAX_THUMB_CHARS - 4);
+  assert.equal(thumb.length, MAX_THUMB_CHARS);
+  const p3 = signPermit({ lead_id: "L-1", carpeta: dir, n_max: 3, exp: NOW + 900 }, "ps");
+  const d = mkDeps({ r2: () => mkR2({ ...files }) });
+  d.fetchImpl = (async (_u: string, init: { body: string }) => { d.calls.push(JSON.parse(JSON.parse(init.body).payload)); return new Response(JSON.stringify({ ok: true, folio: "TEST-0001", fotos: 3 })); }) as unknown as typeof fetch;
+  const body = { permiso: p3, fotos: [1, 2, 3].map((n) => ({ n, miniatura: thumb })) };
+  assert.ok(JSON.stringify(body).length > 400_000, "antes del cambio esto daba 400");
+  const res = await handlePhotosDone(post(body), d);
+  assert.equal(res.status, 200);
+  assert.deepEqual(await res.json(), { fotos: 3, rechazadas: [] });
+  assert.equal((d.calls[0].datos.fotos as unknown[]).length, 3);
+
+  const grande = { permiso: p3, fotos: [{ n: 1, miniatura: "/9j/" + "A".repeat(BODY_MAX.photosDone) }] };
+  assert.equal((await handlePhotosDone(post(grande), mkDeps({ r2: () => mkR2({ ...files }) }))).status, 400);
+});
+
+// ---- B6 · alertas del receptor
+
+function depsWithReceptor(receptor: () => Response | Promise<Response>) {
+  const d = mkDeps();
+  d.fetchImpl = (async (url: string) => (String(url).includes("turnstile") ? new Response(JSON.stringify({ success: true })) : receptor())) as unknown as typeof fetch;
+  return d;
+}
+
+test("B6: cada fallo del receptor deja una línea CB_ALERT fija con la causa y sin datos personales", async () => {
+  const cases: [string, () => Response | Promise<Response>, number][] = [
+    ["timeout", () => { throw new DOMException("The operation timed out.", "TimeoutError"); }, 503],
+    ["timeout", () => { throw new DOMException("aborted", "AbortError"); }, 503],
+    ["network", () => { throw new TypeError("fetch failed"); }, 503],
+    ["http_500", () => new Response("<html>error</html>", { status: 500 }), 503],
+    ["http_404", () => new Response("not found", { status: 404 }), 503],
+    ["non_json", () => new Response("<html>login</html>", { status: 200 }), 503],
+    ["non_json", () => new Response(JSON.stringify({ sin: "ok" }), { status: 200 }), 503],
+    ["ocupado", () => new Response(JSON.stringify({ ok: false, error: "ocupado" })), 503],
+    ["cupo", () => new Response(JSON.stringify({ ok: false, error: "cupo" })), 429],
+    ["firma", () => new Response(JSON.stringify({ ok: false, error: "firma" })), 500],
+    ["datos", () => new Response(JSON.stringify({ ok: false, error: "datos" })), 400],
+  ];
+  for (const [causa, receptor, status] of cases) {
+    const d = depsWithReceptor(receptor);
+    const res = await handleRequest(post(reqBody), d);
+    assert.equal(res.status, status, causa);
+    assert.deepEqual(d.logs, [`CB_ALERT receptor accion=crear causa=${causa}`], causa);
+    for (const l of d.logs) assert.ok(!/Ana|ana@example|3055550123|M3|Widebody|33101|L-1/.test(l), "sin datos personales");
+  }
+  // un código raro del receptor no se cuela al log tal cual
+  const raro = depsWithReceptor(() => new Response(JSON.stringify({ ok: false, error: "Ana Pérez 305-555-0123" })));
+  await handleRequest(post(reqBody), raro);
+  assert.deepEqual(raro.logs, ["CB_ALERT receptor accion=crear causa=desconocida"]);
+  // y sin fallo no hay línea
+  const bien = mkDeps();
+  await handleRequest(post(reqBody), bien);
+  assert.deepEqual(bien.logs, []);
+});
+
+test("B6: callReceptor devuelve la causa de transporte y cb-photos-done también alerta con accion=fotos", async () => {
+  const env = { url: "https://rec", secret: "cd".repeat(32), entorno: "preview" as const };
+  const mk = (f: () => Response | Promise<Response>) => (async () => f()) as unknown as typeof fetch;
+  assert.deepEqual(await callReceptor(env, "ping", {}, mk(() => new Response("x", { status: 502 }))), { ok: false, error: "interno", cause: "http_502" });
+  assert.deepEqual(await callReceptor(env, "ping", {}, mk(() => new Response("{"))), { ok: false, error: "interno", cause: "non_json" });
+  assert.deepEqual(await callReceptor(env, "ping", {}, mk(() => new Response(JSON.stringify({ ok: false, error: "cupo" })))), { ok: false, error: "cupo" });
+  assert.equal((await callReceptor(env, "ping", {}, mk(() => new Response(JSON.stringify({ ok: true, version: "1.1.2" }))))).ok, true);
+
+  const jpeg = new Uint8Array([0xff, 0xd8, 0xff, 0]);
+  const d = mkDeps({ r2: () => mkR2({ "solicitudes/TEST-0001-aaaaaaaa/foto-1.jpg": jpeg }) });
+  d.fetchImpl = (async () => { throw new DOMException("timed out", "TimeoutError"); }) as unknown as typeof fetch;
+  const res = await handlePhotosDone(post({ permiso: permit, fotos: [{ n: 1 }] }), d);
+  assert.equal(res.status, 503);
+  assert.deepEqual(d.logs, ["CB_ALERT receptor accion=fotos causa=timeout"]);
+});
+
+// ---- B7 · lead_id vacío y fotos sin permiso
+
+test("B7: un lead_id vacío del receptor es 503 reintentable, no un 201", async () => {
+  for (const reply of [{ ok: true }, { ok: true, lead_id: "", carpeta: "solicitudes/T-1-aaaaaaaa/" }, { ok: true, lead_id: null }]) {
+    const d = depsWithReceptor(() => new Response(JSON.stringify(reply)));
+    const res = await handleRequest(post(reqBody), d);
+    assert.equal(res.status, 503, JSON.stringify(reply));
+    assert.deepEqual(await res.json(), { error: "unavailable" });
+    assert.deepEqual(d.logs, ["CB_ALERT receptor accion=crear causa=sin_lead_id"]);
+  }
+  assert.equal((await handleRequest(post(reqBody), mkDeps())).status, 201); // con lead_id sigue igual
+});
+
+test("B7: si el 201 no trae permiso y hay fotos, el formulario lo avisa en vez de mostrar solo la confirmación", () => {
+  const submit = FORM.slice(FORM.indexOf("let note: NoticeKind | null"), FORM.indexOf("photos.forEach((p) => URL.revokeObjectURL"));
+  assert.match(submit, /if \(photos\.length\) \{\s*if \(r\.permiso\) \{/);
+  assert.match(submit, /\} else \{[\s\S]*?note = "photos_lost";/);
+  assert.equal(CB_NOTICES.photos_lost.text, "Your photos couldn't be uploaded. We'll reach out if we need them.");
+  assert.match(FORM, /\{notice && <p className="text-gray-400 mt-3"><NoticeText kind=\{notice\.kind\} \/><\/p>\}/); // se ve en la tarjeta de confirmación
+});
+
+// ---- B9 · .lovable/plan.md
+
+test("B9: .lovable/plan.md ya no existe (describía un segundo contenedor GTM que no está aplicado)", () => {
+  assert.equal(existsSync(new URL("../.lovable/plan.md", import.meta.url)), false);
+  assert.doesNotMatch(read("index.html"), /GTM-P77D69RV/);
+  assert.match(read("index.html"), /GTM-W2VG66T5/);
+});
+
+// ---- B10 · correo
+
+test("B10: el correo rechaza lo que se puede leer como otra cosa o que el receptor rompería", () => {
+  const rechazados: [string, string][] = [
+    ["a@b..co", "dos puntos seguidos"], ["a..b@example.com", "dos puntos seguidos en el usuario"],
+    ["a@-.co", "etiqueta que empieza con -"], ["a@b-.co", "etiqueta que termina con -"], ["a@x.-b.co", "etiqueta que empieza con -"],
+    ["a@x.b-.co", "etiqueta que termina con -"], ["a@.example.com", "dominio que empieza con punto"],
+    ["a@example.com.", "dominio que termina con punto"],
+    ["<ana@example.com>", "ángulos"], ["ana<@example.com", "<"], ["ana@example.com>", ">"], ['"ana"@example.com', "comillas"],
+    ["ana,bob@example.com", "coma"], ["ana@example.com;bob@example.com", "punto y coma"],
+    ["ana\u0085@example.com", "U+0085"], ["ana\u200b@example.com", "U+200B"], ["ana@exa\u202emple.com", "U+202E"],
+    ["ana\u0000@example.com", "nulo"], ["ana\u0007@example.com", "control"], ["ana\u007f@example.com", "DEL"],
+    ["ana\ufeff@example.com", "BOM"], ["ana@example\u00ad.com", "guion suave"], ["ana\u2028@example.com", "separador de línea"],
+    ["=1+1@a.co", "fórmula ="], ["+ana@example.com", "empieza con +"], ["-ana@example.com", "empieza con -"],
+    ["=cmd|' /C calc'!A0@a.co", "fórmula con tubería"],
+    ["ana@example", "sin punto en el dominio"], ["ana@", "sin dominio"], ["@example.com", "sin usuario"], ["ana example@x.co", "espacio"],
+    ["ana@@example.com", "dos @"], ["ana@example.c", "TLD de una letra"],
+  ];
+  for (const [correo, por] of rechazados) {
+    assert.equal(isValidEmail(correo), false, `${por}: ${JSON.stringify(correo)}`);
+    const r = validateRequest({ ...valid, correo });
+    assert.equal(r.ok, false, `${por}: ${JSON.stringify(correo)}`);
+    assert.deepEqual(r.errors, { correo: "Enter a valid email address." }, por);
+  }
+});
+
+test("B10: el correo acepta direcciones normales (a@b.co, mayúsculas, +tag, subdominios, apóstrofo)", () => {
+  for (const correo of ["a@b.co", "ANA@Example.COM", "ana.o+tag@sub.example.co.uk", "o'brien@example.com", "ana_1@ex-ample.com", "a@b-c.co", "ana@xn--caf-dma.com", "jose.perez@mail.example.org"]) {
+    assert.equal(isValidEmail(correo), true, correo);
+    const r = validateRequest({ ...valid, correo });
+    assert.ok(r.ok, correo);
+    assert.equal(r.data.correo, correo); // se conserva tal cual, sin pasar a minúsculas
+  }
+  // los blancos de los extremos (y un BOM al inicio, que trim() también quita) se recortan antes de validar
+  assert.ok(validateRequest({ ...valid, correo: "  ana@example.com \t" }).ok);
+  const bom = validateRequest({ ...valid, correo: "\ufeffana@example.com" });
+  assert.ok(bom.ok && bom.data.correo === "ana@example.com");
+  assert.equal(isValidEmail("\ufeffana@example.com"), false); // pero la función sola no lo acepta
+  // un correo vacío o ausente sigue siendo "obligatorio", no "inválido"
+  assert.deepEqual(validateRequest({ ...valid, correo: "" }).errors, { correo: "Enter your email address." });
+  assert.equal(validateRequest({ ...valid, correo: "x".repeat(161) + "@a.co" }).ok, false);
+});
+
+// ---- B11 · borrador
+
+function withSession<T>(raw: string | null, fn: () => T): T {
+  const g = globalThis as { sessionStorage?: unknown };
+  const had = g.sessionStorage;
+  g.sessionStorage = { getItem: () => raw, setItem() {}, removeItem() {} };
+  try { return fn(); } finally { if (had === undefined) delete g.sessionStorage; else g.sessionStorage = had; }
+}
+
+test("B11: loadDraft se queda solo con valores de texto, así normalizePhone y validateRequest no reciben otra cosa", () => {
+  const draft = (fields: unknown, clave: unknown = KEY) => JSON.stringify({ fields, clave });
+  assert.deepEqual(withSession(draft({ nombre: "Ana", telefono: 3055550123, correo: { x: 1 }, marca: null, modelo: ["M3"], anio: true, zona: "33101" }), loadDraft),
+    { fields: { nombre: "Ana", zona: "33101" }, clave: KEY });
+  assert.deepEqual(withSession(draft({ nombre: "Ana" }), loadDraft), { fields: { nombre: "Ana" }, clave: KEY });
+  // una clave que no es UUID v4 se descarta (el servidor la rechazaría con 400 y el usuario quedaría atascado)
+  assert.equal(withSession(draft({ nombre: "Ana" }, "no-es-uuid"), loadDraft)?.clave, "");
+  assert.equal(withSession(draft({ nombre: "Ana" }, 42), loadDraft)?.clave, "");
+  // formas inválidas
+  for (const raw of [null, "", "{no json", "null", "42", '"texto"', "[]", JSON.stringify({ clave: KEY }), JSON.stringify({ fields: "x", clave: KEY }), JSON.stringify({ fields: [1], clave: KEY })]) {
+    assert.equal(withSession(raw, loadDraft), null, String(raw));
+  }
+  // y lo que devuelve ya no rompe el envío: todo valor es texto
+  const d = withSession(draft({ telefono: 3055550123, nombre: "Ana" }), loadDraft)!;
+  assert.ok(Object.values(d.fields).every((v) => typeof v === "string"));
+  // sin almacenamiento (bloqueado) no lanza
+  const g = globalThis as { sessionStorage?: unknown };
+  const had = g.sessionStorage;
+  Object.defineProperty(globalThis, "sessionStorage", { configurable: true, get() { throw new DOMException("insecure", "SecurityError"); } });
+  try { assert.equal(loadDraft(), null); } finally { delete (globalThis as { sessionStorage?: unknown }).sessionStorage; if (had !== undefined) g.sessionStorage = had; }
+});

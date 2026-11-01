@@ -59,6 +59,7 @@ export const ORIGINS = ["google_ads", "utm", "referral", "unknown"] as const;
 export const CLICK_ID_TYPES = ["gclid", "gbraid", "wbraid"] as const;
 export const MAX_PHOTOS = 3;
 export const MAX_PHOTO_BYTES = 3 * 1024 * 1024;
+export const MAX_THUMB_CHARS = 200_000; // miniatura en base64, contrato web-01 §2 (acción fotos)
 
 export type CbFields = {
   nombre: string; telefono: string; correo: string; marca: string; modelo: string;
@@ -75,7 +76,22 @@ export type ValidationResult = { ok: boolean; data?: CbFields; errors?: Record<s
 const UUID_V4 = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 export const isUuidV4 = (v: unknown): v is string => typeof v === "string" && UUID_V4.test(v);
 
-const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
+// Caracteres que el receptor vuelve espacio o que rompen la dirección: controles, invisibles (U+0085, U+200B, U+202E,
+// U+FEFF...) y separadores de línea. No se rechazan letras acentuadas ni dominios internacionales.
+const EMAIL_HIDDEN = /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/u;
+const EMAIL = /^[^\s@<>",;]+@[^\s@<>",;]+\.[^\s@<>",;]{2,}$/;
+
+/**
+ * Correo válido y que no se pueda leer como otra cosa: sin controles ni invisibles, sin "..", sin <>",; y sin empezar
+ * con = + - (el receptor lo guardaría como texto, pero una fórmula en una planilla no es un correo). Las etiquetas
+ * del dominio no empiezan ni terminan con "-" y el dominio no empieza ni termina con ".".
+ */
+export function isValidEmail(v: string): boolean {
+  if (!EMAIL.test(v) || EMAIL_HIDDEN.test(v) || /^[=+-]/.test(v) || v.includes("..")) return false;
+  const domain = v.slice(v.lastIndexOf("@") + 1);
+  if (domain.startsWith(".") || domain.endsWith(".")) return false;
+  return domain.split(".").every((label) => label !== "" && !label.startsWith("-") && !label.endsWith("-"));
+}
 const E164 = /^\+[1-9]\d{7,14}$/;
 const NANP = /^\+1[2-9]\d{2}[2-9]\d{6}$/;
 
@@ -152,7 +168,7 @@ export function validateRequest(input: unknown): ValidationResult {
   if (data.telefono && !errors.telefono && !isRealPhone(data.telefono)) {
     errors.telefono = "Enter a valid phone number.";
   }
-  if (data.correo && !errors.correo && !EMAIL.test(data.correo)) {
+  if (data.correo && !errors.correo && !isValidEmail(data.correo)) {
     errors.correo = "Enter a valid email address.";
   }
   if (data.origen && !(ORIGINS as readonly string[]).includes(data.origen)) errors.origen = "Invalid value.";

@@ -1,6 +1,6 @@
 // Lógica de las tres Functions de Custom Builds, con dependencias inyectadas para probarla.
 // Ninguna respuesta lleva datos personales.
-import { MAX_PHOTOS, MAX_PHOTO_BYTES, isUuidV4, validatePhotosExpected, validateRequest } from "../../shared/cb-schema.ts";
+import { MAX_PHOTOS, MAX_PHOTO_BYTES, MAX_THUMB_CHARS, isUuidV4, validatePhotosExpected, validateRequest } from "../../shared/cb-schema.ts";
 import { signPermit, verifyPermit } from "./permit.ts";
 import { callReceptor, receptorErrorStatus, type ReceptorResult } from "./receptor.ts";
 import { verifyTurnstile } from "./turnstile.ts";
@@ -36,11 +36,17 @@ function json(status: number, body: Record<string, unknown>, extra: Record<strin
 }
 const fail = (status: number, error: string, extra?: Record<string, unknown>) => json(status, { error, ...extra });
 
-async function readJson(req: Request): Promise<Record<string, unknown> | null> {
+// Tope del cuerpo de cada Function (caracteres). cb-photos-done lleva hasta 3 miniaturas de MAX_THUMB_CHARS (web-01 §2,
+// acción fotos) más el permiso (máximo 2000) y la estructura: el tope sale de esas cifras, no de una inventada. El
+// contrato no escribe el tope del cuerpo; la pregunta para GOB quedó en el paquete de entrega.
+const BODY_ENVELOPE = 4_000;
+export const BODY_MAX = { request: 400_000, photoUrls: 400_000, photosDone: MAX_PHOTOS * MAX_THUMB_CHARS + BODY_ENVELOPE } as const;
+
+async function readJson(req: Request, max: number): Promise<Record<string, unknown> | null> {
   if (req.method !== "POST") return null;
   try {
     const text = await req.text();
-    if (text.length > 400_000) return null;
+    if (text.length > max) return null;
     const j = JSON.parse(text);
     return j && typeof j === "object" && !Array.isArray(j) ? j : null;
   } catch {
@@ -71,9 +77,17 @@ function configFail(d: Deps, fn: string, needsR2 = false): Response | null {
   return fail(500, "config");
 }
 
-function receptorFail(d: Deps, r: Extract<ReceptorResult, { ok: false }>) {
-  const { status, alert } = receptorErrorStatus(r.error);
-  if (alert) d.log?.(`ALERT cb receptor config error: ${r.error}`);
+/** Causa que se escribe en el log: una palabra fija (transporte o código del receptor), nunca texto libre ni datos de la solicitud. */
+const safeCause = (c: string) => (/^[a-z0-9_]{1,24}$/.test(c) ? c : "desconocida");
+
+/**
+ * Cada fallo del receptor deja una línea fija, sin datos personales, con el prefijo CB_ALERT y la causa (timeout,
+ * http_<status>, non_json, network, o el código que contestó el receptor). Hikashi configura la alerta de Netlify
+ * sobre ese prefijo.
+ */
+function receptorFail(d: Deps, accion: "crear" | "fotos", r: Extract<ReceptorResult, { ok: false }>) {
+  d.log?.(`CB_ALERT receptor accion=${accion} causa=${safeCause(r.cause ?? r.error)}`);
+  const { status } = receptorErrorStatus(r.error);
   return fail(status, status === 503 ? "unavailable" : status === 429 ? "quota" : status === 409 ? "conflict" : status === 400 ? "invalid" : "config");
 }
 
@@ -81,7 +95,7 @@ export async function handleRequest(req: Request, d: Deps): Promise<Response> {
   if (req.method !== "POST") return fail(405, "method");
   const bad = configFail(d, "cb-request");
   if (bad) return bad;
-  const body = await readJson(req);
+  const body = await readJson(req, BODY_MAX.request);
   if (!body) return fail(400, "invalid");
 
   const clave = body.clave;
@@ -103,9 +117,14 @@ export async function handleRequest(req: Request, d: Deps): Promise<Response> {
     d.fetchImpl,
     nowSec(d),
   );
-  if (!r.ok) return receptorFail(d, r);
+  if (!r.ok) return receptorFail(d, "crear", r);
 
   const leadId = String(r.lead_id || "");
+  // ok:true sin lead_id no trae nada que medir ni a qué atar las fotos: reintentable (la misma clave devuelve el replay).
+  if (!leadId) {
+    d.log?.("CB_ALERT receptor accion=crear causa=sin_lead_id");
+    return fail(503, "unavailable");
+  }
   const carpeta = String(r.carpeta || "");
   const nMax = Number(r.fotos_esperadas || 0);
   const medir = r.duplicado !== true;
@@ -120,7 +139,7 @@ export async function handlePhotoUrls(req: Request, d: Deps): Promise<Response> 
   if (req.method !== "POST") return fail(405, "method");
   const bad = configFail(d, "cb-photo-urls", true);
   if (bad) return bad;
-  const body = await readJson(req);
+  const body = await readJson(req, BODY_MAX.photoUrls);
   if (!body) return fail(400, "invalid");
   const permit = verifyPermit(body.permiso, d.permitSecret, nowSec(d));
   if (!permit) return fail(401, "permit");
@@ -153,7 +172,7 @@ export async function handlePhotosDone(req: Request, d: Deps): Promise<Response>
   if (req.method !== "POST") return fail(405, "method");
   const bad = configFail(d, "cb-photos-done", true);
   if (bad) return bad;
-  const body = await readJson(req);
+  const body = await readJson(req, BODY_MAX.photosDone);
   if (!body) return fail(400, "invalid");
   const permit = verifyPermit(body.permiso, d.permitSecret, nowSec(d));
   if (!permit) return fail(401, "permit");
@@ -178,7 +197,7 @@ export async function handlePhotosDone(req: Request, d: Deps): Promise<Response>
       const isJpeg = !!bytes && bytes.length >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff;
       if (!isJpeg) { await r2.remove(key); rejected.push(f.n); continue; }
       const m = f.miniatura;
-      const okThumb = typeof m === "string" && m.length <= 200_000 && m.startsWith("/9j/") && /^[A-Za-z0-9+/=]+$/.test(m);
+      const okThumb = typeof m === "string" && m.length <= MAX_THUMB_CHARS && m.startsWith("/9j/") && /^[A-Za-z0-9+/=]+$/.test(m);
       verified.push(okThumb ? { n: f.n, miniatura: m as string } : { n: f.n });
     }
   } catch {
@@ -193,6 +212,6 @@ export async function handlePhotosDone(req: Request, d: Deps): Promise<Response>
     d.fetchImpl,
     nowSec(d),
   );
-  if (!r.ok) return receptorFail(d, r);
+  if (!r.ok) return receptorFail(d, "fotos", r);
   return json(200, { fotos: verified.length, rechazadas: rejected });
 }

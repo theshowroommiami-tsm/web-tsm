@@ -1,13 +1,16 @@
 import { createHmac } from "node:crypto";
 
-export type ReceptorResult = { ok: true; [k: string]: unknown } | { ok: false; error: string };
+// `cause` solo viaja cuando el fallo es de transporte (timeout, http_<status>, non_json, network): lo usa la línea CB_ALERT.
+export type ReceptorResult = { ok: true; [k: string]: unknown } | { ok: false; error: string; cause?: string };
 
 export function signPayload(payload: string, secretHex: string): string {
   // La clave es el texto hex en UTF-8, no los bytes que representa (contrato §2).
   return createHmac("sha256", secretHex).update(payload, "utf8").digest("hex");
 }
 
-/** POST firmado al receptor. Timeout o respuesta ilegible = error "interno" (503). */
+const isTimeout = (e: unknown) => e instanceof Error && (e.name === "TimeoutError" || e.name === "AbortError");
+
+/** POST firmado al receptor. Timeout o respuesta ilegible = error "interno" (503), con la causa para la alerta. */
 export async function callReceptor(
   env: { url: string; secret: string; entorno: "production" | "preview" },
   accion: "crear" | "fotos" | "ping",
@@ -24,13 +27,16 @@ export async function callReceptor(
       redirect: "follow",
       signal: AbortSignal.timeout(8000),
     });
-    const j = await res.json();
-    if (j && typeof j === "object" && typeof j.ok === "boolean") {
-      return j.ok ? j : { ok: false, error: String(j.error || "interno") };
+    if (!res.ok) return { ok: false, error: "interno", cause: `http_${res.status}` };
+    let j: unknown;
+    try { j = await res.json(); } catch { return { ok: false, error: "interno", cause: "non_json" }; }
+    const r = j as { ok?: unknown; error?: unknown } | null;
+    if (r && typeof r === "object" && typeof r.ok === "boolean") {
+      return r.ok ? (j as ReceptorResult) : { ok: false, error: String(r.error || "interno") };
     }
-    return { ok: false, error: "interno" };
-  } catch {
-    return { ok: false, error: "interno" };
+    return { ok: false, error: "interno", cause: "non_json" };
+  } catch (e) {
+    return { ok: false, error: "interno", cause: isTimeout(e) ? "timeout" : "network" };
   }
 }
 

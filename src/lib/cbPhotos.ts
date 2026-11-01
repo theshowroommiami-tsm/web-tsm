@@ -1,9 +1,8 @@
 // Recodifica fotos por canvas a JPEG (sin EXIF) y genera la miniatura para el receptor.
-import { MAX_PHOTO_BYTES } from "../../shared/cb-schema.ts";
+import { MAX_PHOTO_BYTES, MAX_THUMB_CHARS } from "../../shared/cb-schema.ts";
 
 export const PHOTO_LONG_SIDE = 2000; // contrato: 1600 a 2400 px de lado largo
 export const THUMB_LONG_SIDE = 560; // contrato: 480 a 640 px
-const MAX_THUMB_CHARS = 200000;
 
 export type ProcessedPhoto = { name: string; blob: Blob; thumb: string; previewUrl: string };
 
@@ -26,8 +25,21 @@ function draw(bmp: ImageBitmap, longSide: number): HTMLCanvasElement {
   return c;
 }
 
+/**
+ * Decodifica respetando la orientación EXIF (las fotos de iPhone vienen giradas). Algunos motores no aceptan el valor
+ * "from-image" en las opciones y lanzan TypeError: se reintenta sin opciones, que en la especificación actual ya
+ * es "from-image". Si el archivo no es una imagen, el segundo intento también falla y el error sube.
+ */
+export async function decodeImage(file: Blob): Promise<ImageBitmap> {
+  try {
+    return await createImageBitmap(file, { imageOrientation: "from-image" });
+  } catch {
+    return await createImageBitmap(file);
+  }
+}
+
 export async function processPhoto(file: File): Promise<ProcessedPhoto> {
-  const bmp = await createImageBitmap(file, { imageOrientation: "from-image" });
+  const bmp = await decodeImage(file);
   try {
     const main = draw(bmp, PHOTO_LONG_SIDE);
     let q = 0.85;
