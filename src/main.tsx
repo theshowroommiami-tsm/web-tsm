@@ -5,9 +5,11 @@ import App from './App.tsx'
 import './index.css'
 import { initCallTracking } from './utils/callTracking'
 import { initAttribution } from './lib/cbAttribution'
+import { initEstimateCtaTracking } from './lib/cbDataLayer'
 
 initCallTracking();
 initAttribution();
+initEstimateCtaTracking();
 
 const root = document.getElementById("root")!;
 const app = (

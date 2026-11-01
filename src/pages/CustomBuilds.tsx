@@ -94,7 +94,7 @@ const CustomBuilds = () => {
                   </Button>
                 </a>
                 <div className="mt-4">
-                <a href="#estimate" onClick={goToEstimate}>
+                <a href="#estimate" onClick={goToEstimate} data-cta-location="hero">
                   <Button size="lg" variant="outline" className="border-neon-cyan text-neon-cyan font-bold px-8 py-4 rounded-lg">
                     Request a Custom Build Estimate
                   </Button>
@@ -149,7 +149,7 @@ const CustomBuilds = () => {
                 ))}
               </div>
               <div className="text-center mt-10">
-                <a href="#estimate" onClick={goToEstimate}>
+                <a href="#estimate" onClick={goToEstimate} data-cta-location="after_projects">
                   <Button size="lg" variant="outline" className="border-neon-cyan text-neon-cyan font-bold px-8 py-4 rounded-lg">
                     Request a Custom Build Estimate
                   </Button>

@@ -7,6 +7,7 @@ import {
 import { loadAttribution } from "../../../shared/cb-attribution.ts";
 import { processPhoto, type ProcessedPhoto } from "@/lib/cbPhotos";
 import { clearDraft, loadDraft, newIdempotencyKey, postRequest, saveDraft, uploadPhotos } from "@/lib/cbClient";
+import { trackGenerateLead } from "@/lib/cbDataLayer";
 
 export const ESTIMATE_SECTION_ID = "estimate";
 export const ESTIMATE_HEADING_ID = "estimate-heading";
@@ -146,6 +147,9 @@ const EstimateForm = () => {
       setStatus("idle"); busyRef.current = false;
       return;
     }
+
+    // Nivel 2 (anl-06 §3): sale con el 201, antes de pedir el permiso de fotos. No depende de ellas.
+    trackGenerateLead(r.leadId, r.medir);
 
     let note = "";
     if (r.permiso && photos.length) {
