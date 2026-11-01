@@ -4,8 +4,10 @@ import { BrowserRouter } from 'react-router-dom'
 import App from './App.tsx'
 import './index.css'
 import { initCallTracking } from './utils/callTracking'
+import { initAttribution } from './lib/cbAttribution'
 
 initCallTracking();
+initAttribution();
 
 const root = document.getElementById("root")!;
 const app = (

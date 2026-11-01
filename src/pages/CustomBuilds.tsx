@@ -10,6 +10,7 @@ import FloatingCallButton from "@/components/FloatingCallButton";
 import SolutionSection from "@/components/conversion/SolutionSection";
 import SocialProof from "@/components/conversion/SocialProof";
 import FAQSection from "@/components/conversion/FAQSection";
+import EstimateForm, { goToEstimate } from "@/components/custom-builds/EstimateForm";
 import { BUSINESS_PHONE_DISPLAY, BUSINESS_PHONE_HREF } from "@/config/business";
 
 const CustomBuilds = () => {
@@ -92,6 +93,13 @@ const CustomBuilds = () => {
                     Schedule Consultation - {BUSINESS_PHONE_DISPLAY}
                   </Button>
                 </a>
+                <div className="mt-4">
+                <a href="#estimate" onClick={goToEstimate}>
+                  <Button size="lg" variant="outline" className="border-neon-cyan text-neon-cyan font-bold px-8 py-4 rounded-lg">
+                    Request a Custom Build Estimate
+                  </Button>
+                </a>
+                </div>
                 <p className="text-sm text-neon-cyan mt-3 font-medium mb-8">
                   Free consultation • Custom design mockups included
                 </p>
@@ -140,8 +148,17 @@ const CustomBuilds = () => {
                   </div>
                 ))}
               </div>
+              <div className="text-center mt-10">
+                <a href="#estimate" onClick={goToEstimate}>
+                  <Button size="lg" variant="outline" className="border-neon-cyan text-neon-cyan font-bold px-8 py-4 rounded-lg">
+                    Request a Custom Build Estimate
+                  </Button>
+                </a>
+              </div>
             </div>
           </section>
+
+          <EstimateForm />
 
           {/* Solution Section */}
           <SolutionSection 
