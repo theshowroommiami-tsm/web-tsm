@@ -1,3 +1,3 @@
 # Proxy /blog hacia blog-tsm (web-tsm F4-T4 / blog-tsm F3-T5). Estas reglas van primeras; ningún fallback SPA antes.
-/blog    https://tsm-blog.netlify.app/blog    200!
-/blog/*  https://tsm-blog.netlify.app/blog/:splat  200!
+/blog    https://blog-tsm.netlify.app/blog    200!
+/blog/*  https://blog-tsm.netlify.app/blog/:splat  200!
