@@ -4,7 +4,7 @@ import {
   BRANDS, BUDGETS, MAX_LEN, MAX_PHOTOS, SERVICES, TIMELINES,
   normalizePhone, validateRequest, type CbFields,
 } from "../../../shared/cb-schema.ts";
-import { loadAttribution } from "../../../shared/cb-attribution.ts";
+import { currentAttribution } from "@/lib/cbAttribution";
 import { processPhoto, type ProcessedPhoto } from "@/lib/cbPhotos";
 import { clearDraft, loadDraft, newIdempotencyKey, postRequest, saveDraft, uploadPhotos } from "@/lib/cbClient";
 import { trackGenerateLead } from "@/lib/cbDataLayer";
@@ -130,7 +130,7 @@ const EstimateForm = () => {
     e.preventDefault();
     if (busyRef.current) return; // doble clic
     const raw: Record<string, string> = { ...fields, telefono: fields.telefono ? normalizePhone(fields.telefono) || fields.telefono : "" };
-    const a = loadAttribution(window.localStorage);
+    const a = currentAttribution(); // null si no hay o el navegador bloquea el almacenamiento: el envío sigue
     const campos = { ...raw, ...(a ?? {}) } as Partial<CbFields>;
     const v = validateRequest(campos);
     if (!v.ok) { setErrors(v.errors); setNotice("Please fix the highlighted fields."); focusFirstError(v.errors); return; }

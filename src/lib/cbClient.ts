@@ -26,6 +26,17 @@ export type SubmitOutcome =
   | { kind: "ok"; leadId: string; permiso: string | null; medir: boolean }
   | { kind: "turnstile" | "quota" | "invalid" | "retry" | "error" };
 
+/** Forma mínima del 201 ({lead_id, permiso, medir}): lead_id texto no vacío; permiso texto o null; medir solo cuenta si es true. */
+async function readCreated(res: Response): Promise<{ leadId: string; permiso: string | null; medir: boolean } | null> {
+  let j: unknown;
+  try { j = await res.json(); } catch { return null; }
+  if (!j || typeof j !== "object") return null;
+  const { lead_id, permiso, medir } = j as Record<string, unknown>;
+  if (typeof lead_id !== "string" || !lead_id) return null;
+  if (permiso != null && typeof permiso !== "string") return null;
+  return { leadId: lead_id, permiso: typeof permiso === "string" ? permiso : null, medir: medir === true };
+}
+
 export async function postRequest(clave: string, token: string, campos: Partial<CbFields>, fotosEsperadas: number): Promise<SubmitOutcome> {
   let res: Response;
   try {
@@ -36,8 +47,11 @@ export async function postRequest(clave: string, token: string, campos: Partial<
     });
   } catch { return { kind: "retry" }; }
   if (res.status === 201) {
-    const j = await res.json();
-    return { kind: "ok", leadId: j.lead_id, permiso: j.permiso ?? null, medir: j.medir === true };
+    // Un 201 sin cuerpo utilizable (no es JSON, o falta lead_id) no trae un lead_id confiable: se trata como
+    // "retry" (la tabla de web-01: una respuesta que no sea el JSON esperado = reintentable). La clave de
+    // idempotencia no se toca, así el reintento recibe el replay del mismo lead y no crea otro.
+    const j = await readCreated(res);
+    return j ? { kind: "ok", ...j } : { kind: "retry" };
   }
   if (res.status === 403) return { kind: "turnstile" };
   if (res.status === 429) return { kind: "quota" };
