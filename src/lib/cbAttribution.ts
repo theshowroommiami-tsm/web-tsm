@@ -1,5 +1,5 @@
 // Captura la atribución al aterrizar en cualquier página (localStorage, 90 días).
-import { captureAttribution, loadAttribution, saveAttribution, type Attribution } from "../../shared/cb-attribution.ts";
+import { captureAttribution, loadAttribution, recordAttribution, type Attribution } from "../../shared/cb-attribution.ts";
 
 /**
  * Atribución guardada, o null si no hay o el almacenamiento está bloqueado. Con los datos del sitio
@@ -16,6 +16,7 @@ export function initAttribution() {
   if (typeof window === "undefined") return;
   try {
     const a = captureAttribution(window.location.search, window.location.pathname, document.referrer, window.location.hostname);
-    if (a) saveAttribution(window.localStorage, a);
+    // Una señal más débil no pisa una más fuerte vigente (p. ej. un gclid del lunes frente a un referrer del miércoles).
+    if (a) recordAttribution(window.localStorage, a);
   } catch { /* almacenamiento bloqueado */ }
 }

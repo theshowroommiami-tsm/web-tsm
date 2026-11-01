@@ -1,4 +1,5 @@
 // Atribución de Custom Builds (alcance 6). Funciones puras; el almacenamiento se inyecta.
+import { CLICK_ID_TYPES, MAX_LEN, ORIGINS } from "./cb-schema.ts";
 
 export const ATTRIBUTION_KEY = "tsm_cb_attribution";
 export const ATTRIBUTION_TTL_MS = 90 * 24 * 60 * 60 * 1000;
@@ -50,6 +51,53 @@ export function captureAttribution(search: string, pathname: string, referrer: s
 
 type StorageLike = { getItem(k: string): string | null; setItem(k: string, v: string): void; removeItem(k: string): void };
 
+/** Rango de cada señal: una más débil no pisa a una más fuerte vigente (google_ads 3, utm 2, referral 1). */
+export const ORIGIN_RANK: Record<Attribution["origen"], number> = { google_ads: 3, utm: 2, referral: 1, unknown: 0 };
+
+const TEXT_KEYS = ["utm_source", "utm_medium", "utm_campaign", "utm_term", "utm_content", "aterrizaje", "referrer"] as const;
+
+/**
+ * Reconstruye una atribución desde algo leído del almacenamiento: solo claves conocidas, textos dentro de MAX_LEN,
+ * origen y tipo de click_id de sus listas, y el origen respaldado por su evidencia (google_ads con click_id y su
+ * tipo, utm con alguna UTM, referral con referrer). Si algo no cumple devuelve null: una atribución guardada
+ * (vieja, manipulada o de otra versión) nunca puede invalidar el envío de una solicitud.
+ */
+export function sanitizeAttribution(raw: unknown): Attribution | null {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+  const src = raw as Record<string, unknown>;
+  const text = (k: keyof typeof MAX_LEN): string | null | undefined => {
+    const v = src[k];
+    if (v === undefined || v === null) return undefined;
+    return typeof v === "string" && v.length <= MAX_LEN[k] ? v : null; // null = inválido
+  };
+
+  const origen = src.origen;
+  if (typeof origen !== "string" || origen === "unknown" || !(ORIGINS as readonly string[]).includes(origen)) return null;
+  const a: Attribution = { origen: origen as Attribution["origen"] };
+
+  for (const k of TEXT_KEYS) {
+    const v = text(k);
+    if (v === null) return null;
+    if (v) a[k] = v;
+  }
+  const tipo = src.click_id_tipo;
+  const id = text("click_id");
+  if (id === null) return null;
+  if (tipo !== undefined && tipo !== null && !(CLICK_ID_TYPES as readonly string[]).includes(tipo as string)) return null;
+  if (!!tipo !== !!id) return null; // el tipo y el valor van juntos
+  if (tipo && id) { a.click_id_tipo = tipo as Attribution["click_id_tipo"]; a.click_id = id; }
+
+  const evidence = a.origen === "google_ads" ? !!a.click_id
+    : a.origen === "utm" ? !!(a.utm_source || a.utm_medium || a.utm_campaign)
+    : !!a.referrer;
+  return evidence ? a : null;
+}
+
+/** La señal que gana: la guardada si es más fuerte que la nueva; con igual o mayor rango, la nueva (último clic). */
+export function mergeAttribution(prev: Attribution | null, next: Attribution): Attribution {
+  return prev && ORIGIN_RANK[prev.origen] > ORIGIN_RANK[next.origen] ? prev : next;
+}
+
 export function saveAttribution(store: StorageLike, a: Attribution, now = Date.now()) {
   try {
     store.setItem(ATTRIBUTION_KEY, JSON.stringify({ savedAt: now, data: a } satisfies StoredAttribution));
@@ -65,8 +113,18 @@ export function loadAttribution(store: StorageLike, now = Date.now()): Attributi
       store.removeItem(ATTRIBUTION_KEY);
       return null;
     }
-    return s.data;
+    return sanitizeAttribution(s.data);
   } catch {
     return null;
   }
+}
+
+/**
+ * Guarda la señal de un aterrizaje sin pisar una más fuerte vigente. Si la guardada es más fuerte no se toca (ni se
+ * renueva su savedAt); si la nueva es de igual o mayor rango la reemplaza y renueva savedAt. Devuelve lo que quedó.
+ */
+export function recordAttribution(store: StorageLike, next: Attribution, now = Date.now()): Attribution {
+  const kept = mergeAttribution(loadAttribution(store, now), next);
+  if (kept === next) saveAttribution(store, next, now);
+  return kept;
 }

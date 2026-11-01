@@ -1,4 +1,5 @@
 // Esquema único de la solicitud de Custom Builds (contrato web-01 v1.1.2, §3).
+// Con la solicitud válida, `origen` siempre viaja: unknown cuando no hay ninguna señal (normalizeOrigin).
 // Lo importan el navegador y las Netlify Functions: no depende de DOM ni de Node.
 // Desde v1.1.2 el teléfono y el correo son obligatorios, cada uno con su formato válido.
 
@@ -10,10 +11,35 @@ export const MAX_LEN = {
   aterrizaje: 300, referrer: 200,
 } as const;
 
+// Las 13 marcas aprobadas por Hikashi (2026-11-01) más Other al final. "Land Rover / Range Rover" es UNA opción.
 export const BRANDS = [
-  "Audi", "BMW", "Chevrolet", "Dodge", "Ferrari", "Ford", "Jeep", "Lamborghini",
-  "Land Rover", "Mercedes-Benz", "Porsche", "Rolls-Royce", "Tesla", "Other",
+  "Porsche", "Mercedes-Benz", "BMW", "Land Rover / Range Rover", "Rolls-Royce", "Bentley", "Bugatti",
+  "McLaren", "Ferrari", "Lamborghini", "Aston Martin", "Lexus", "Maserati", "Other",
 ] as const;
+
+// Con Other, el formulario pide "Which make?" y la marca que viaja es "Other: <texto>" (el contrato no cambia:
+// 7 + 50 caracteres caben en MAX_LEN.marca).
+export const OTHER_BRAND = "Other";
+export const OTHER_BRAND_PREFIX = "Other: ";
+export const OTHER_BRAND_MAX = 50;
+
+const otherBrandText = (marcaOtra: string) => (marcaOtra || "").trim().replace(/\s+/g, " ");
+
+/** Marca que viaja en la solicitud: la elegida, o "Other: <texto>" si eligió Other y escribió cuál. */
+export function brandToSend(marca: string, marcaOtra: string): string {
+  if (marca !== OTHER_BRAND) return marca;
+  const t = otherBrandText(marcaOtra);
+  return t ? OTHER_BRAND_PREFIX + t : OTHER_BRAND;
+}
+
+/** Error de "Which make?" (solo aplica con Other). Devuelve "" si está bien. */
+export function otherBrandError(marca: string, marcaOtra: string): string {
+  if (marca !== OTHER_BRAND) return "";
+  const t = otherBrandText(marcaOtra);
+  if (!t) return "Enter the make.";
+  if (t.length > OTHER_BRAND_MAX) return `Maximum ${OTHER_BRAND_MAX} characters.`;
+  return "";
+}
 
 export const BUDGETS = [
   "Less than $5,000", "$5,000 to $10,000", "$10,000 to $30,000",
@@ -79,6 +105,19 @@ function isRealPhone(p: string): boolean {
 
 const str = (v: unknown) => (typeof v === "string" ? v.trim() : "");
 
+/**
+ * El origen sale de la evidencia que viaja, no de lo que declare el navegador: click_id con su tipo = google_ads;
+ * si no, UTM = utm; si no, referrer = referral; si no, unknown. Un click_id sin click_id_tipo (o al revés) se
+ * descarta: nada se atribuye a Google Ads sin un identificador de clic completo. Modifica `data` en el lugar.
+ */
+export function normalizeOrigin(data: Record<string, string>): void {
+  if (!data.click_id || !data.click_id_tipo) { delete data.click_id; delete data.click_id_tipo; }
+  data.origen = data.click_id ? "google_ads"
+    : data.utm_source || data.utm_medium || data.utm_campaign ? "utm"
+    : data.referrer ? "referral"
+    : "unknown";
+}
+
 export function validateRequest(input: unknown): ValidationResult {
   const src = (input && typeof input === "object" ? input : {}) as Record<string, unknown>;
   const errors: Record<string, string> = {};
@@ -121,7 +160,9 @@ export function validateRequest(input: unknown): ValidationResult {
     errors.click_id_tipo = "Invalid value.";
   }
 
-  return Object.keys(errors).length ? { ok: false, errors } : { ok: true, data: data as unknown as CbFields };
+  if (Object.keys(errors).length) return { ok: false, errors };
+  normalizeOrigin(data); // también en el servidor: el origen que declare el navegador no cuenta
+  return { ok: true, data: data as unknown as CbFields };
 }
 
 export function validatePhotosExpected(v: unknown): number | null {

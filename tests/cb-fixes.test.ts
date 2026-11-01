@@ -50,12 +50,12 @@ test("atribución: readAttribution sigue leyendo la atribución guardada cuando 
   assert.ok(m.has(ATTRIBUTION_KEY));
 });
 
-test("atribución: sin atribución (almacenamiento bloqueado) la solicitud valida igual, sin origen", () => {
+test("atribución: sin atribución (almacenamiento bloqueado) la solicitud valida igual y el origen es 'unknown'", () => {
   const a = withBlockedWindow(() => currentAttribution());
   const campos = { ...valid, ...(a ?? {}) };
   const v = validateRequest(campos);
   assert.equal(v.ok, true);
-  assert.ok(v.ok && !("origen" in v.data));
+  assert.ok(v.ok && v.data.origen === "unknown"); // requisito §6: si falta el origen, se marca desconocido
 });
 
 test("EstimateForm: la atribución se lee con currentAttribution(), sin tocar window.localStorage en onSubmit", () => {

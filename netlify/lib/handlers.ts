@@ -14,10 +14,11 @@ export interface R2Client {
 
 export type Entorno = "production" | "preview";
 export type Deps = {
-  entorno: Entorno;
+  entorno: Entorno | null; // null = CB_ENTORNO ausente o mal escrito: las Functions fallan cerrado
   permitSecret: string;
   receptor: { url: string; secret: string };
   turnstileSecret?: string;
+  r2Missing?: string[]; // nombres (nunca valores) de las R2_* ausentes o que no corresponden al entorno
   r2: () => R2Client;
   fetchImpl?: typeof fetch;
   now?: () => number; // segundos unix
@@ -47,8 +48,27 @@ async function readJson(req: Request): Promise<Record<string, unknown> | null> {
   }
 }
 
-function configured(d: Deps): boolean {
-  return !!(d.permitSecret && d.receptor.url && d.receptor.secret && (d.entorno === "preview" || d.turnstileSecret));
+/**
+ * Nombres de las variables que faltan o están mal (nunca sus valores). Vacío = configurado. Las dos Functions de
+ * fotos exigen además las R2_*; cb-request no las usa y sigue guardando solicitudes aunque R2 esté mal.
+ */
+export function configProblems(d: Deps, needsR2 = false): string[] {
+  const p: string[] = [];
+  if (d.entorno !== "production" && d.entorno !== "preview") p.push("CB_ENTORNO");
+  if (!d.permitSecret) p.push("CB_PERMIT_SECRET");
+  if (!d.receptor.url) p.push("RECEPTOR_URL");
+  if (!d.receptor.secret) p.push("RECEPTOR_SECRET");
+  if (d.entorno === "production" && !d.turnstileSecret) p.push("TURNSTILE_SECRET_KEY");
+  if (needsR2) p.push(...(d.r2Missing ?? []));
+  return p;
+}
+
+/** Si la configuración no está completa: 500 y una línea CB_ALERT con los nombres (no los valores) que faltan. */
+function configFail(d: Deps, fn: string, needsR2 = false): Response | null {
+  const bad = configProblems(d, needsR2);
+  if (!bad.length) return null;
+  d.log?.(`CB_ALERT config fn=${fn} missing=${bad.join(",")}`);
+  return fail(500, "config");
 }
 
 function receptorFail(d: Deps, r: Extract<ReceptorResult, { ok: false }>) {
@@ -59,7 +79,8 @@ function receptorFail(d: Deps, r: Extract<ReceptorResult, { ok: false }>) {
 
 export async function handleRequest(req: Request, d: Deps): Promise<Response> {
   if (req.method !== "POST") return fail(405, "method");
-  if (!configured(d)) { d.log?.("ALERT cb-request: missing configuration"); return fail(500, "config"); }
+  const bad = configFail(d, "cb-request");
+  if (bad) return bad;
   const body = await readJson(req);
   if (!body) return fail(400, "invalid");
 
@@ -70,12 +91,13 @@ export async function handleRequest(req: Request, d: Deps): Promise<Response> {
   const v = validateRequest(body.campos);
   if (!v.ok) return fail(400, "invalid", { campos: Object.keys(v.errors) });
 
+  const entorno = d.entorno as Entorno; // configFail ya descartó el null
   const token = typeof body.token === "string" ? body.token : "";
-  const human = await verifyTurnstile({ entorno: d.entorno, secret: d.turnstileSecret }, token, clave, d.fetchImpl);
+  const human = await verifyTurnstile({ entorno, secret: d.turnstileSecret }, token, clave, d.fetchImpl);
   if (!human) return fail(403, "turnstile");
 
   const r = await callReceptor(
-    { url: d.receptor.url, secret: d.receptor.secret, entorno: d.entorno },
+    { url: d.receptor.url, secret: d.receptor.secret, entorno },
     "crear",
     { clave, ...v.data, fotos_esperadas: esperadas },
     d.fetchImpl,
@@ -96,7 +118,8 @@ export async function handleRequest(req: Request, d: Deps): Promise<Response> {
 
 export async function handlePhotoUrls(req: Request, d: Deps): Promise<Response> {
   if (req.method !== "POST") return fail(405, "method");
-  if (!configured(d)) { d.log?.("ALERT cb-photo-urls: missing configuration"); return fail(500, "config"); }
+  const bad = configFail(d, "cb-photo-urls", true);
+  if (bad) return bad;
   const body = await readJson(req);
   if (!body) return fail(400, "invalid");
   const permit = verifyPermit(body.permiso, d.permitSecret, nowSec(d));
@@ -112,8 +135,8 @@ export async function handlePhotoUrls(req: Request, d: Deps): Promise<Response> 
     if (size > MAX_PHOTO_BYTES) return fail(413, "too_large");
     seen.add(n);
   }
-  const r2 = d.r2();
   try {
+    const r2 = d.r2();
     const urls = await Promise.all(
       fotos.map(async (f: { n: number; size: number }) => ({
         n: f.n,
@@ -128,7 +151,8 @@ export async function handlePhotoUrls(req: Request, d: Deps): Promise<Response> 
 
 export async function handlePhotosDone(req: Request, d: Deps): Promise<Response> {
   if (req.method !== "POST") return fail(405, "method");
-  if (!configured(d)) { d.log?.("ALERT cb-photos-done: missing configuration"); return fail(500, "config"); }
+  const bad = configFail(d, "cb-photos-done", true);
+  if (bad) return bad;
   const body = await readJson(req);
   if (!body) return fail(400, "invalid");
   const permit = verifyPermit(body.permiso, d.permitSecret, nowSec(d));
@@ -142,10 +166,10 @@ export async function handlePhotosDone(req: Request, d: Deps): Promise<Response>
     seen.add(f.n);
   }
 
-  const r2 = d.r2();
   const verified: { n: number; miniatura?: string }[] = [];
   const rejected: number[] = [];
   try {
+    const r2 = d.r2();
     for (const f of fotos as { n: number; miniatura?: unknown }[]) {
       const key = `${permit.carpeta}foto-${f.n}.jpg`;
       const head = await r2.head(key);
@@ -163,7 +187,7 @@ export async function handlePhotosDone(req: Request, d: Deps): Promise<Response>
 
   if (verified.length === 0) return json(200, { fotos: 0, rechazadas: rejected });
   const r = await callReceptor(
-    { url: d.receptor.url, secret: d.receptor.secret, entorno: d.entorno },
+    { url: d.receptor.url, secret: d.receptor.secret, entorno: d.entorno as Entorno },
     "fotos",
     { lead_id: permit.lead_id, fotos: verified },
     d.fetchImpl,
