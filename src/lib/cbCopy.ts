@@ -21,10 +21,10 @@ export const CB_NOTICES: Record<NoticeKind, { text: string; phone: boolean }> = 
   wait: { text: "Please wait for the security check to finish, then try again. If it doesn't finish, call us at", phone: true },
   tserror: { text: "The security check couldn't load. Please reload the page or call us at", phone: true },
   nokey: { text: "This form isn't available right now. Please call us at", phone: true },
-  turnstile: { text: "We couldn't verify you're human. Please try again.", phone: false },
+  turnstile: { text: "We couldn't verify you're human. Please try again, or call us at", phone: true },
   quota: { text: "We can't take more requests right now. Please call us at", phone: true },
-  invalid: { text: "Some details didn't pass our checks. Please review the form.", phone: false },
-  retry: { text: "We couldn't reach our server. Please try again in a moment.", phone: false },
+  invalid: { text: "Some details didn't pass our checks. Please review the form, or call us at", phone: true },
+  retry: { text: "We couldn't reach our server. Please try again in a moment, or call us at", phone: true },
   error: { text: "Something went wrong. Please try again or call us at", phone: true },
   photos: { text: "Some photos couldn't be uploaded. We'll reach out if we need them.", phone: false },
   photos_lost: { text: "Your photos couldn't be uploaded. We'll reach out if we need them.", phone: false },
@@ -32,3 +32,4 @@ export const CB_NOTICES: Record<NoticeKind, { text: string; phone: boolean }> = 
 
 export const CB_SENDING = "Sending your request…";
 export const CB_UPLOADING = "Uploading your photos, please keep this page open";
+export const CB_PREPARING = "Preparing your photos…";

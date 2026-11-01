@@ -10,6 +10,7 @@ import {
   sanitizeAttribution, saveAttribution, type Attribution,
 } from "../shared/cb-attribution.ts";
 import { CB_CONFIRMATION, CB_INTRO, CB_NOTICES, CB_PRICE_NOTE } from "../src/lib/cbCopy.ts";
+import { turnstileSizeFor } from "../src/lib/cbSubmit.ts";
 import { handlePhotoUrls, handlePhotosDone, handleRequest, type Deps, type R2Client } from "../netlify/lib/handlers.ts";
 import { signPermit } from "../netlify/lib/permit.ts";
 import { depsFromEnv, R2_BUCKETS } from "../netlify/lib/env.ts";
@@ -190,8 +191,11 @@ test("A5: el estado y los errores van dentro del formulario, junto al botón, co
   const iButton = form.indexOf("<Button ");
   assert.ok(iAlert > 0 && iAlert < iButton, "el aviso queda justo antes del botón de enviar");
   assert.ok(form.indexOf("<div ref={tsEl} />") < iAlert, "y después del widget de seguridad");
-  // y no queda una región de estado fuera del formulario, arriba
-  assert.ok(!FORM.slice(0, FORM.indexOf("<form ")).includes("aria-live=\"polite\" role=\"status\""));
+  // y no queda una región de estado (aria-live o role=status) fuera del formulario, sea cual sea el orden de los atributos;
+  // la tarjeta de confirmación (role=status con tabIndex) es la única excepción, porque reemplaza al formulario
+  const fuera = (FORM.slice(0, FORM.indexOf("<form ")) + FORM.slice(FORM.indexOf("</form>"))).split("\n")
+    .filter((l) => /aria-live|role="status"/.test(l) && !/tabIndex=\{-1\}/.test(l) && !/id="cb-fotos-msg"/.test(l) && !/CB_|preparing/.test(l));
+  assert.deepEqual(fuera.filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l)), []);
   // un fallo lleva el aviso a la vista
   assert.match(FORM, /noticeRef\.current\?\.scrollIntoView\(\{ block: "center"/);
 });
@@ -220,9 +224,9 @@ test("A5: los obligatorios se exponen a tecnologías de apoyo y teléfono y corr
 
 // ---- A6 · salida clara con el teléfono
 
-test("A6: cupo, error y 'security check' llevan el teléfono de business.ts como enlace de llamada", () => {
-  for (const kind of ["wait", "tserror", "nokey", "quota", "error"] as const) assert.equal(CB_NOTICES[kind].phone, true, kind);
-  for (const kind of ["turnstile", "invalid", "retry", "fields", "photos", "photos_lost"] as const) assert.equal(CB_NOTICES[kind].phone, false, kind);
+test("A6: todo aviso de fallo (cupo, error, security check, 403, 400, retry) lleva el teléfono de business.ts como enlace de llamada", () => {
+  for (const kind of ["wait", "tserror", "nokey", "quota", "error", "retry", "turnstile", "invalid"] as const) assert.equal(CB_NOTICES[kind].phone, true, kind);
+  for (const kind of ["fields", "photos", "photos_lost"] as const) assert.equal(CB_NOTICES[kind].phone, false, kind); // no son un fallo del envío
   assert.match(FORM, /import \{ BUSINESS_PHONE_DISPLAY, BUSINESS_PHONE_HREF \} from "@\/config\/business"/);
   assert.match(FORM, /<a href=\{BUSINESS_PHONE_HREF\} data-call-location="page_body"/);
   assert.match(FORM, />\s*\{BUSINESS_PHONE_DISPLAY\}\s*<\/a>/);
@@ -255,15 +259,16 @@ test("A7: campos de 44 px, 16 px de letra y márgenes de desplazamiento; el bot�
 });
 
 test("A7: Turnstile elige el widget compacto cuando el espacio es menor a 300 px y se redibuja al girar", () => {
-  assert.match(FORM, /TURNSTILE_NORMAL_WIDTH = 300/);
-  assert.match(FORM, /return w > 0 && w < TURNSTILE_NORMAL_WIDTH \? "compact" : "normal"/);
+  assert.equal(turnstileSizeFor(238), "compact"); // 320 px de pantalla
+  assert.equal(turnstileSizeFor(294), "compact"); // 360 px
+  assert.equal(turnstileSizeFor(299), "compact");
+  assert.equal(turnstileSizeFor(300), "normal");
+  assert.equal(turnstileSizeFor(518), "normal");  // escritorio
+  assert.equal(turnstileSizeFor(0), "normal");    // sin medir
+  assert.match(FORM, /turnstileSizeFor\(tsEl\.current\?\.clientWidth \?\? 0\)/);
   assert.match(FORM, /sitekey: SITE_KEY, action: "cb_request", size,/);
   assert.match(FORM, /new ResizeObserver/);
   assert.match(FORM, /window\.turnstile\.remove\(tsId\.current\)/);
-});
-
-test("A7: FloatingCallButton no se toca", () => {
-  assert.match(read("src/components/FloatingCallButton.tsx"), /fixed bottom-6 right-6 z-50/);
 });
 
 // ---- A8 · configuración que falla cerrado
@@ -330,7 +335,8 @@ const FULL = {
 test("A8: depsFromEnv acepta solo 'production' o 'preview' exactos y deja el entorno en null con cualquier otro valor", () => {
   const cases: [string | undefined, string | null][] = [
     ["production", "production"], ["preview", "preview"],
-    [undefined, null], ["", null], ["Production", null], ["PREVIEW", null], ["prod", null], [" production", null], ["development", null],
+    [undefined, null], ["", null], ["Production", null], ["PREVIEW", null], ["prod", null], ["development", null],
+    [" production", "production"], ["production\n", "production"], ["\tpreview ", "preview"], // trim(): el valor que se quiso cargar
   ];
   for (const [value, want] of cases) {
     const d = withNetlifyEnv({ ...FULL, ...(value === undefined ? {} : { CB_ENTORNO: value }), R2_BUCKET: R2_BUCKETS.preview }, depsFromEnv);
@@ -366,7 +372,15 @@ const stored = (m: Map<string, string>) => JSON.parse(m.get(ATTRIBUTION_KEY)!) a
 test("A9: loadAttribution reconstruye el objeto o devuelve null; una atribución guardada no invalida el envío", () => {
   const put = (data: unknown, savedAt = 1000) => { const x = mem(); x.m.set(ATTRIBUTION_KEY, JSON.stringify({ savedAt, data })); return x.store; };
   // válida: solo claves conocidas (las extras se descartan)
-  assert.deepEqual(loadAttribution(put({ ...GADS, extra: "x", __proto__: { a: 1 } }), 2000), GADS);
+  const conProto = { savedAt: 1000, data: { ...GADS, extra: "x" } };
+  const px = mem();
+  px.m.set(ATTRIBUTION_KEY, JSON.stringify(conProto).replace('"extra":"x"', '"extra":"x","__proto__":{"polluted":true},"constructor":"c"'));
+  assert.ok(Object.prototype.hasOwnProperty.call(JSON.parse(px.m.get(ATTRIBUTION_KEY)!).data, "__proto__")); // la clave existe de verdad
+  const cargada = loadAttribution(px.store, 2000);
+  assert.deepEqual(cargada, GADS); // se descartan las claves ajenas, __proto__ y constructor incluidos
+  assert.equal(Object.prototype.hasOwnProperty.call(cargada!, "__proto__"), false);
+  assert.equal(({} as { polluted?: boolean }).polluted, undefined);
+  assert.deepEqual(loadAttribution(put({ ...GADS, extra: "x" }), 2000), GADS);
   // un utm_term largo (lo que hoy bloquea al usuario) -> null, y la solicitud valida igual
   const largo = put({ ...UTM, utm_term: "x".repeat(MAX_LEN.utm_term + 1) });
   assert.equal(loadAttribution(largo, 2000), null);
@@ -726,14 +740,6 @@ test("B7: un lead_id vacío del receptor es 503 reintentable, no un 201", async 
     assert.deepEqual(d.logs, ["CB_ALERT receptor accion=crear causa=sin_lead_id"]);
   }
   assert.equal((await handleRequest(post(reqBody), mkDeps())).status, 201); // con lead_id sigue igual
-});
-
-test("B7: si el 201 no trae permiso y hay fotos, el formulario lo avisa en vez de mostrar solo la confirmación", () => {
-  const submit = FORM.slice(FORM.indexOf("let note: NoticeKind | null"), FORM.indexOf("photos.forEach((p) => URL.revokeObjectURL"));
-  assert.match(submit, /if \(photos\.length\) \{\s*if \(r\.permiso\) \{/);
-  assert.match(submit, /\} else \{[\s\S]*?note = "photos_lost";/);
-  assert.equal(CB_NOTICES.photos_lost.text, "Your photos couldn't be uploaded. We'll reach out if we need them.");
-  assert.match(FORM, /\{notice && <p className="text-gray-400 mt-3"><NoticeText kind=\{notice\.kind\} \/><\/p>\}/); // se ve en la tarjeta de confirmación
 });
 
 // ---- B9 · .lovable/plan.md

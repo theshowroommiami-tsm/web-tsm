@@ -192,7 +192,7 @@ test("generate_lead: lista de hasta 20, se descarta el más viejo; valor corrupt
 });
 
 // ---- código del flujo (anl-06 §3.5 g y h)
-const flowFiles = ["src/lib/cbDataLayer.ts", "src/lib/cbClient.ts", "src/components/custom-builds/EstimateForm.tsx", "src/pages/CustomBuilds.tsx"];
+const flowFiles = ["src/lib/cbDataLayer.ts", "src/lib/cbClient.ts", "src/lib/cbSubmit.ts", "src/lib/cbFloatingCall.ts", "src/components/custom-builds/EstimateForm.tsx", "src/pages/CustomBuilds.tsx"];
 const read = (f: string) => readFileSync(new URL(`../${f}`, import.meta.url), "utf8");
 
 test("código del flujo: sin gtag(, gtag/js ni googleadservices; lead_id y folio no van a la URL", () => {
@@ -203,11 +203,11 @@ test("código del flujo: sin gtag(, gtag/js ni googleadservices; lead_id y folio
   }
 });
 
-test("EstimateForm: generate_lead sale al 201, antes de pedir el permiso de fotos", () => {
+test("EstimateForm: generate_lead sale solo desde runSubmit (que lo prueba con dobles), nunca desde el componente", () => {
   const src = read("src/components/custom-builds/EstimateForm.tsx");
-  const lead = src.indexOf("trackGenerateLead(r.leadId, r.medir)");
-  assert.ok(lead > src.indexOf('r.kind !== "ok"'));
-  assert.ok(lead < src.indexOf("uploadPhotos(r.permiso"));
+  assert.equal((src.match(/trackGenerateLead/g) ?? []).length, 2); // el import y la dependencia que se le pasa a runSubmit
+  assert.match(src, /runSubmit\(/);
+  assert.doesNotMatch(src, /trackGenerateLead\(/);
 });
 
 test("CustomBuilds: los dos botones del estimado llevan data-cta-location hero y after_projects", () => {

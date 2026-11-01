@@ -3,7 +3,7 @@
 import { MAX_PHOTOS, MAX_PHOTO_BYTES, MAX_THUMB_CHARS, isUuidV4, validatePhotosExpected, validateRequest } from "../../shared/cb-schema.ts";
 import { signPermit, verifyPermit } from "./permit.ts";
 import { callReceptor, receptorErrorStatus, type ReceptorResult } from "./receptor.ts";
-import { verifyTurnstile } from "./turnstile.ts";
+import { TURNSTILE_TEST_SECRET, checkTurnstile } from "./turnstile.ts";
 
 export interface R2Client {
   presignPut(key: string, size: number): Promise<string>;
@@ -14,7 +14,8 @@ export interface R2Client {
 
 export type Entorno = "production" | "preview";
 export type Deps = {
-  entorno: Entorno | null; // null = CB_ENTORNO ausente o mal escrito: las Functions fallan cerrado
+  entorno: Entorno | null; // null = CB_ENTORNO ausente, mal escrito o contrario al contexto: las Functions fallan cerrado
+  entornoProblem?: string; // nombre que se escribe en la alerta cuando entorno es null (por defecto CB_ENTORNO)
   permitSecret: string;
   receptor: { url: string; secret: string };
   turnstileSecret?: string;
@@ -60,11 +61,15 @@ async function readJson(req: Request, max: number): Promise<Record<string, unkno
  */
 export function configProblems(d: Deps, needsR2 = false): string[] {
   const p: string[] = [];
-  if (d.entorno !== "production" && d.entorno !== "preview") p.push("CB_ENTORNO");
+  if (d.entorno !== "production" && d.entorno !== "preview") p.push(d.entornoProblem ?? "CB_ENTORNO");
   if (!d.permitSecret) p.push("CB_PERMIT_SECRET");
   if (!d.receptor.url) p.push("RECEPTOR_URL");
   if (!d.receptor.secret) p.push("RECEPTOR_SECRET");
   if (d.entorno === "production" && !d.turnstileSecret) p.push("TURNSTILE_SECRET_KEY");
+  // Las Secret Keys de prueba de Cloudflare empiezan con 1x, 2x o 3x (las reales, con 0x): en producción no valen.
+  if (d.entorno === "production" && d.turnstileSecret && (d.turnstileSecret === TURNSTILE_TEST_SECRET || /^[123]x/.test(d.turnstileSecret))) {
+    p.push("TURNSTILE_SECRET_KEY(prueba)");
+  }
   if (needsR2) p.push(...(d.r2Missing ?? []));
   return p;
 }
@@ -77,13 +82,23 @@ function configFail(d: Deps, fn: string, needsR2 = false): Response | null {
   return fail(500, "config");
 }
 
+/** Causa de un fallo de R2 para el log: una palabra fija (head_403, get_500, timeout, error), nunca el mensaje ni claves. */
+function r2Cause(e: unknown): string {
+  if (e instanceof Error) {
+    if (e.name === "TimeoutError" || e.name === "AbortError") return "timeout";
+    const m = /^r2 (head|get) (\d{3})$/.exec(e.message); // los mensajes que arma netlify/lib/r2.ts
+    if (m) return `${m[1]}_${m[2]}`;
+  }
+  return "error";
+}
+
 /** Causa que se escribe en el log: una palabra fija (transporte o código del receptor), nunca texto libre ni datos de la solicitud. */
 const safeCause = (c: string) => (/^[a-z0-9_]{1,24}$/.test(c) ? c : "desconocida");
 
 /**
  * Cada fallo del receptor deja una línea fija, sin datos personales, con el prefijo CB_ALERT y la causa (timeout,
- * http_<status>, non_json, network, o el código que contestó el receptor). Hikashi configura la alerta de Netlify
- * sobre ese prefijo.
+ * http_<status>, non_json, network, o el código que contestó el receptor). Las líneas CB_ALERT quedan en el log
+ * de la Function: leerlas requiere un log drain o revisión manual (Netlify no alerta por patrón de log por sí mismo).
  */
 function receptorFail(d: Deps, accion: "crear" | "fotos", r: Extract<ReceptorResult, { ok: false }>) {
   d.log?.(`CB_ALERT receptor accion=${accion} causa=${safeCause(r.cause ?? r.error)}`);
@@ -107,8 +122,13 @@ export async function handleRequest(req: Request, d: Deps): Promise<Response> {
 
   const entorno = d.entorno as Entorno; // configFail ya descartó el null
   const token = typeof body.token === "string" ? body.token : "";
-  const human = await verifyTurnstile({ entorno, secret: d.turnstileSecret }, token, clave, d.fetchImpl);
-  if (!human) return fail(403, "turnstile");
+  const human = await checkTurnstile({ entorno, secret: d.turnstileSecret }, token, clave, d.fetchImpl);
+  if (human.outcome === "unavailable") {
+    // No es quien envía: Cloudflare caído o lento, o un secret inválido. 503 reintentable, no "verify you're human".
+    d.log?.(`CB_ALERT turnstile causa=${human.cause}`);
+    return fail(503, "unavailable");
+  }
+  if (human.outcome === "rejected") return fail(403, "turnstile");
 
   const r = await callReceptor(
     { url: d.receptor.url, secret: d.receptor.secret, entorno },
@@ -163,7 +183,8 @@ export async function handlePhotoUrls(req: Request, d: Deps): Promise<Response> 
       })),
     );
     return json(200, { urls });
-  } catch {
+  } catch (e) {
+    d.log?.(`CB_ALERT r2 fn=cb-photo-urls causa=${r2Cause(e)}`);
     return fail(503, "unavailable");
   }
 }
@@ -200,7 +221,8 @@ export async function handlePhotosDone(req: Request, d: Deps): Promise<Response>
       const okThumb = typeof m === "string" && m.length <= MAX_THUMB_CHARS && m.startsWith("/9j/") && /^[A-Za-z0-9+/=]+$/.test(m);
       verified.push(okThumb ? { n: f.n, miniatura: m as string } : { n: f.n });
     }
-  } catch {
+  } catch (e) {
+    d.log?.(`CB_ALERT r2 fn=cb-photos-done causa=${r2Cause(e)}`);
     return fail(503, "unavailable");
   }
 

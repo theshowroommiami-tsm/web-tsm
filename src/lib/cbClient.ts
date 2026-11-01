@@ -38,10 +38,12 @@ export type SubmitOutcome =
   | { kind: "ok"; leadId: string; permiso: string | null; medir: boolean }
   | { kind: "turnstile" | "quota" | "invalid" | "retry" | "error" };
 
-// Tiempos del cliente. Las Functions tardan como máximo ~16 s (Turnstile 8 s + receptor 8 s) y Netlify corta a los 60 s;
-// una subida colgada no puede dejar el formulario bloqueado. El PUT prefirmado vence a los 300 s y el permiso a los 15 min:
-// tres fotos en serie a 40 s suman 120 s y caben en las dos ventanas.
-export const CB_TIMEOUTS = { request: 30_000, photoUrls: 15_000, put: 40_000, photosDone: 20_000 } as const;
+// Tiempos del cliente. cb-request: la Function tarda como máximo ~16 s (Turnstile 8 s + receptor 8 s). cb-photos-done: el
+// peor caso del servidor son 3 fotos x 3 llamadas a R2 x 4 s = 36 s más 8 s del receptor = 44 s, y Netlify corta a los
+// 60 s; el cliente espera 50 s, más que el servidor y menos que el corte, para no rendirse mientras el servidor aún
+// registra las fotos. El PUT prefirmado vence a los 300 s y el permiso a los 15 min: tres fotos en serie a 40 s suman
+// 120 s, y el total (15 + 120 + 50 s) cabe en las dos ventanas.
+export const CB_TIMEOUTS = { request: 30_000, photoUrls: 15_000, put: 40_000, photosDone: 50_000 } as const;
 export type CbTimeouts = { [K in keyof typeof CB_TIMEOUTS]: number };
 
 /** Ejecuta `run` con una señal que se aborta a los `ms` (AbortController: AbortSignal.timeout no existe en Safari < 16). */

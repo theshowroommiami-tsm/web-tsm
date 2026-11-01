@@ -1,3 +1,4 @@
+import { useEffect, useState } from "react";
 import Navigation from "@/components/Navigation";
 import Footer from "@/components/Footer";
 import SEOHead from "@/components/SEOHead";
@@ -10,10 +11,27 @@ import FloatingCallButton from "@/components/FloatingCallButton";
 import SolutionSection from "@/components/conversion/SolutionSection";
 import SocialProof from "@/components/conversion/SocialProof";
 import FAQSection from "@/components/conversion/FAQSection";
-import EstimateForm, { goToEstimate } from "@/components/custom-builds/EstimateForm";
+import EstimateForm, { ESTIMATE_SECTION_ID, goToEstimate } from "@/components/custom-builds/EstimateForm";
+import { MOBILE_QUERY, hideFloatingCall } from "@/lib/cbFloatingCall";
 import { BUSINESS_PHONE_DISPLAY, BUSINESS_PHONE_HREF } from "@/config/business";
 
 const CustomBuilds = () => {
+  // CALL NOW no se dibuja mientras el formulario está en pantalla en móvil (tapa errores de campo y el botón de enviar).
+  const [mobile, setMobile] = useState(false);
+  const [formInView, setFormInView] = useState(false);
+  useEffect(() => {
+    const mq = window.matchMedia?.(MOBILE_QUERY);
+    const onChange = () => setMobile(!!mq?.matches);
+    onChange();
+    mq?.addEventListener?.("change", onChange);
+    const form = document.getElementById(ESTIMATE_SECTION_ID);
+    const io = form && typeof IntersectionObserver !== "undefined"
+      ? new IntersectionObserver(([entry]) => setFormInView(entry.isIntersecting))
+      : null;
+    if (io && form) io.observe(form);
+    return () => { mq?.removeEventListener?.("change", onChange); io?.disconnect(); };
+  }, []);
+
   const customFeatures = ["Performance upgrades and modifications", "Luxury interior customization", "Custom paint and graphic work", "Suspension and handling upgrades", "Audio system integration", "Body kit installation"];
 
   const solutionBenefits = [
@@ -324,7 +342,7 @@ const CustomBuilds = () => {
         </main>
 
         <Footer />
-        <FloatingCallButton />
+        {!hideFloatingCall(mobile, formInView) && <FloatingCallButton />}
       </div>
     </>
   );

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
+import { ChevronDown } from "lucide-react";
 import { cn } from "@/lib/utils";
 import {
   BRANDS, BUDGETS, MAX_LEN, MAX_PHOTOS, OTHER_BRAND, OTHER_BRAND_MAX, SERVICES, TIMELINES,
@@ -10,8 +11,9 @@ import { processPhoto, type ProcessedPhoto } from "@/lib/cbPhotos";
 import { clearDraft, loadDraft, newIdempotencyKey, postRequest, saveDraft, uploadPhotos } from "@/lib/cbClient";
 import { trackGenerateLead } from "@/lib/cbDataLayer";
 import {
-  CB_CONFIRMATION, CB_INTRO, CB_NOTICES, CB_PRICE_NOTE, CB_SENDING, CB_UPLOADING, type NoticeKind,
+  CB_CONFIRMATION, CB_INTRO, CB_NOTICES, CB_PREPARING, CB_PRICE_NOTE, CB_SENDING, CB_UPLOADING, type NoticeKind,
 } from "@/lib/cbCopy";
+import { canSubmit, prepareFiles, runSubmit, turnstileSizeFor, type SubmitSession } from "@/lib/cbSubmit";
 import { BUSINESS_PHONE_DISPLAY, BUSINESS_PHONE_HREF } from "@/config/business";
 
 export const ESTIMATE_SECTION_ID = "estimate";
@@ -19,7 +21,6 @@ export const ESTIMATE_HEADING_ID = "estimate-heading";
 
 const SITE_KEY = import.meta.env.VITE_TURNSTILE_SITE_KEY as string | undefined;
 const TURNSTILE_SRC = "https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit";
-const TURNSTILE_NORMAL_WIDTH = 300; // ancho del widget normal; con menos espacio se usa el compacto (150 px)
 
 declare global {
   interface Window {
@@ -32,7 +33,6 @@ declare global {
 }
 
 type Status = "idle" | "sending" | "uploading" | "done";
-type TurnstileSize = "normal" | "compact";
 const FIELD_ORDER = ["nombre", "telefono", "correo", "marca", "marca_otra", "modelo", "anio", "zona", "servicio", "descripcion"];
 const VISIBLE_FIELDS = [...FIELD_ORDER, "presupuesto", "plazo"];
 // Parejas de campos. Ningún campo baja de 160 px: el formulario ocupa todo el ancho hasta lg y media columna
@@ -93,7 +93,12 @@ const EstimateForm = ({ className }: { className?: string }) => {
   const [status, setStatus] = useState<Status>("idle");
   const [notice, setNotice] = useState<{ kind: NoticeKind } | null>(null);
   const [token, setToken] = useState("");
-  const claveRef = useRef("");
+  // El HTML que sirve el servidor no se puede enviar: los controles quedan deshabilitados hasta que la página hidrata.
+  // Sin JavaScript (o antes de hidratar) el envío nativo sería un GET con los datos del cliente en la URL.
+  const [ready, setReady] = useState(false);
+  const [preparing, setPreparing] = useState(0); // fotos que se están recodificando
+  const preparingRef = useRef(0);
+  const sessionRef = useRef<SubmitSession>({ clave: "", failed: null }); // clave de idempotencia y último fallo
   const busyRef = useRef(false);
   const tsEl = useRef<HTMLDivElement>(null);
   const tsId = useRef<string>();
@@ -111,8 +116,9 @@ const EstimateForm = ({ className }: { className?: string }) => {
 
   // Borrador de la sesión (solo en el navegador, después de hidratar).
   useEffect(() => {
+    setReady(true);
     const d = loadDraft();
-    if (d) { setFields(d.fields); claveRef.current = d.clave; }
+    if (d) { setFields(d.fields); sessionRef.current.clave = d.clave; }
   }, []);
 
   // Turnstile, acción cb_request. El widget compacto (150 px) entra donde el normal (300 px) no cabe, p. ej. 320 y 360 px.
@@ -123,11 +129,8 @@ const EstimateForm = ({ className }: { className?: string }) => {
       return;
     }
     if (!tsEl.current) return;
-    let size: TurnstileSize = "normal";
-    const wanted = (): TurnstileSize => {
-      const w = tsEl.current?.clientWidth ?? 0;
-      return w > 0 && w < TURNSTILE_NORMAL_WIDTH ? "compact" : "normal";
-    };
+    let size = turnstileSizeFor(0);
+    const wanted = () => turnstileSizeFor(tsEl.current?.clientWidth ?? 0);
     const mount = () => {
       if (!window.turnstile || !tsEl.current || tsId.current) return;
       size = wanted();
@@ -190,8 +193,8 @@ const EstimateForm = ({ className }: { className?: string }) => {
   const set = (k: string, v: string) => {
     setFields((prev) => {
       const next = { ...prev, [k]: v };
-      if (!claveRef.current) claveRef.current = newIdempotencyKey();
-      saveDraft({ fields: next, clave: claveRef.current });
+      if (!sessionRef.current.clave) sessionRef.current.clave = newIdempotencyKey();
+      saveDraft({ fields: next, clave: sessionRef.current.clave });
       return next;
     });
     if (errors[k] || (k === "marca" && errors.marca_otra)) {
@@ -203,14 +206,15 @@ const EstimateForm = ({ className }: { className?: string }) => {
     const list = Array.from(e.target.files ?? []);
     e.target.value = "";
     setPhotoMsg("");
-    const room = MAX_PHOTOS - photos.length;
-    if (list.length > room) setPhotoMsg(`You can attach up to ${MAX_PHOTOS} photos.`);
-    const added: ProcessedPhoto[] = [];
-    for (const f of list.slice(0, Math.max(room, 0))) {
-      try { added.push(await processPhoto(f)); }
-      catch { setPhotoMsg(`We couldn't read "${f.name}". Please use a JPG, PNG or WebP photo.`); }
+    // Recodificar tarda: mientras tanto el botón de enviar espera (si no, la solicitud saldría sin las fotos).
+    preparingRef.current += 1; setPreparing(preparingRef.current);
+    try {
+      const { added, message } = await prepareFiles(list, MAX_PHOTOS - photos.length, MAX_PHOTOS, (f) => processPhoto(f as File));
+      setPhotoMsg(message);
+      setPhotos((p) => [...p, ...added].slice(0, MAX_PHOTOS));
+    } finally {
+      preparingRef.current -= 1; setPreparing(preparingRef.current);
     }
-    setPhotos((p) => [...p, ...added].slice(0, MAX_PHOTOS));
   };
   const removePhoto = (i: number) => setPhotos((p) => { URL.revokeObjectURL(p[i].previewUrl); return p.filter((_, j) => j !== i); });
 
@@ -227,7 +231,7 @@ const EstimateForm = ({ className }: { className?: string }) => {
 
   const onSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (busyRef.current) return; // doble clic
+    if (!canSubmit({ ready, busy: busyRef.current, preparing: preparingRef.current > 0 })) return; // doble clic, o fotos aún en proceso
     const otherErr = otherBrandError(fields.marca ?? "", fields.marca_otra ?? ""); // "Which make?" con Other
     const raw: Record<string, string> = {
       ...fields,
@@ -254,36 +258,26 @@ const EstimateForm = ({ className }: { className?: string }) => {
 
     busyRef.current = true;
     setErrors({}); setNotice(null); setStatus("sending");
-    if (!claveRef.current) claveRef.current = newIdempotencyKey();
-    const r = await postRequest(claveRef.current, token, v.data, photos.length);
+    // La decisión (clave, reintento, generate_lead, fotos) vive en runSubmit y se prueba con dobles.
+    const result = await runSubmit({ campos: v.data as unknown as Record<string, string>, token, photos }, sessionRef.current, {
+      postRequest,
+      uploadPhotos,
+      trackGenerateLead,
+      newKey: newIdempotencyKey,
+      onKeyChange: (clave) => saveDraft({ fields, clave }),
+      resetTurnstile: () => { window.turnstile?.reset(tsId.current); setToken(""); },
+      clearDraft,
+      onUploading: () => setStatus("uploading"),
+    });
 
-    if (r.kind !== "ok") {
-      if (r.kind === "turnstile" || r.kind === "retry") { window.turnstile?.reset(tsId.current); setToken(""); }
+    if (result.kind !== "done") {
       setStatus("idle"); busyRef.current = false;
-      showNotice(r.kind);
+      showNotice(result.notice);
       return;
     }
-
-    // Nivel 2 (anl-06 §3): sale con el 201, antes de pedir el permiso de fotos. No depende de ellas.
-    trackGenerateLead(r.leadId, r.medir);
-
-    let note: NoticeKind | null = null;
-    if (photos.length) {
-      if (r.permiso) {
-        setStatus("uploading");
-        try {
-          const ok = await uploadPhotos(r.permiso, photos);
-          if (ok < photos.length) note = "photos";
-        } catch { note = "photos_lost"; }
-      } else {
-        // Sin permiso no hay dónde subirlas (p. ej. un reintento de una solicitud que se guardó sin fotos): se avisa.
-        note = "photos_lost";
-      }
-    }
     photos.forEach((p) => URL.revokeObjectURL(p.previewUrl));
-    clearDraft(); claveRef.current = "";
     scrollNoticeRef.current = false;
-    setNotice(note ? { kind: note } : null); setStatus("done"); busyRef.current = false;
+    setNotice(result.note ? { kind: result.note } : null); setStatus("done"); busyRef.current = false;
   };
 
   const busy = status === "sending" || status === "uploading";
@@ -298,12 +292,17 @@ const EstimateForm = ({ className }: { className?: string }) => {
     disabled: busy,
     className: inputCls,
   });
+  // appearance-none: WebKit ignora min-height y padding de un select nativo (medía 26 px); la flecha es propia.
   const select = (k: string, options: readonly string[], required = false) => (
-    <select {...(common(k, required) as React.SelectHTMLAttributes<HTMLSelectElement>)}>
-      <option value="">Select…</option>
-      {options.map((o) => <option key={o} value={o}>{o}</option>)}
-    </select>
+    <div className="relative">
+      <select {...(common(k, required) as React.SelectHTMLAttributes<HTMLSelectElement>)} className={cn(inputCls, "appearance-none pr-10")}>
+        <option value="">Select…</option>
+        {options.map((o) => <option key={o} value={o}>{o}</option>)}
+      </select>
+      <ChevronDown aria-hidden="true" className="pointer-events-none absolute right-3 top-1/2 h-5 w-5 -translate-y-1/2 text-gray-300" />
+    </div>
   );
+  const canSend = canSubmit({ ready, busy, preparing: preparing > 0 });
 
   return (
     <section id={ESTIMATE_SECTION_ID} className={cn("min-w-0 scroll-mt-28", className)} aria-labelledby={ESTIMATE_HEADING_ID}>
@@ -320,7 +319,8 @@ const EstimateForm = ({ className }: { className?: string }) => {
           {notice && <p className="text-gray-400 mt-3"><NoticeText kind={notice.kind} /></p>}
         </div>
       ) : (
-        <form ref={formRef} onSubmit={onSubmit} noValidate className="space-y-5 rounded-lg border border-neon-purple/30 bg-card p-4 min-[400px]:p-6 sm:p-8">
+        <form ref={formRef} method="post" onSubmit={onSubmit} noValidate className="rounded-lg border border-neon-purple/30 bg-card p-4 min-[400px]:p-6 sm:p-8">
+         <fieldset disabled={!ready} className="m-0 min-w-0 space-y-5 border-0 p-0">
           <FieldWrap error={errors.nombre} k="nombre" label="Full name" required><input type="text" autoComplete="name" {...common("nombre", true)} /></FieldWrap>
           <div className={CONTACT}>
             <FieldWrap error={errors.telefono} k="telefono" label="Phone" required><input type="tel" autoComplete="tel" inputMode="tel" {...common("telefono", true)} /></FieldWrap>
@@ -349,7 +349,9 @@ const EstimateForm = ({ className }: { className?: string }) => {
               Photos <span className="text-gray-400">(optional, up to {MAX_PHOTOS})</span>
             </label>
             <input id="cb-fotos" type="file" accept="image/*" multiple onChange={onFiles}
-              disabled={busy || photos.length >= MAX_PHOTOS} className="block w-full text-sm text-gray-300" aria-describedby="cb-fotos-msg" />
+              disabled={busy || preparing > 0 || photos.length >= MAX_PHOTOS} aria-describedby="cb-fotos-msg"
+              className="block w-full min-h-11 scroll-mt-32 scroll-mb-28 text-base text-gray-300 file:mr-3 file:min-h-11 file:cursor-pointer file:rounded-md file:border-0 file:bg-neon-purple/30 file:px-4 file:py-2 file:text-base file:font-medium file:text-white" />
+            {preparing > 0 && <p role="status" className="mt-1 text-sm text-neon-cyan">{CB_PREPARING}</p>}
             <p id="cb-fotos-msg" className="mt-1 text-sm text-red-400" aria-live="polite">{photoMsg}</p>
             {photos.length > 0 && (
               <ul className="mt-3 flex gap-3 flex-wrap">
@@ -375,10 +377,11 @@ const EstimateForm = ({ className }: { className?: string }) => {
             {notice && <p role="alert" className="text-red-400"><NoticeText kind={notice.kind} /></p>}
           </div>
 
-          <Button ref={submitRef} type="submit" size="lg" disabled={busy} aria-disabled={busy}
-            className="w-full bg-gradient-to-r from-neon-pink to-neon-purple text-white font-bold">
+          <Button ref={submitRef} type="submit" size="lg" disabled={!canSend} aria-disabled={!canSend}
+            className="w-full scroll-mt-32 scroll-mb-28 bg-gradient-to-r from-neon-pink to-neon-purple text-white font-bold">
             {busy ? "Sending…" : "Request Estimate"}
           </Button>
+         </fieldset>
         </form>
       )}
     </section>

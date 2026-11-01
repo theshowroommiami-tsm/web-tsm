@@ -174,19 +174,12 @@ test("201 malformado: no empuja generate_lead; el reintento con la misma clave s
   } finally { s.restore(); }
 });
 
-test("EstimateForm: con 'retry' sale del estado de envío y conserva la clave de idempotencia", () => {
+test("EstimateForm: un fallo (retry, error...) sale del estado de envío y conserva la clave de idempotencia (lo prueba runSubmit)", () => {
   const src = read("src/components/custom-builds/EstimateForm.tsx");
-  const start = src.indexOf('if (r.kind !== "ok") {');
-  const end = src.indexOf("trackGenerateLead(r.leadId, r.medir)");
-  assert.ok(start > 0 && end > start);
-  const block = src.slice(start, end);
-  assert.match(block, /r\.kind === "retry"/);                  // reinicia Turnstile y borra el token consumido
-  assert.match(block, /setStatus\("idle"\)/);                  // ya no está enviando
-  assert.match(block, /busyRef\.current = false/);             // se puede reenviar
-  assert.match(block, /return;/);
-  assert.doesNotMatch(block, /claveRef\.current = ""/);        // misma clave: el reintento es un replay
-  assert.doesNotMatch(block, /clearDraft\(\)/);                // el borrador (y su clave) sobreviven
-  assert.ok(src.indexOf('claveRef.current = ""') > end);       // la clave solo se limpia tras el éxito
+  assert.match(src, /if \(result\.kind !== "done"\) \{\s*setStatus\("idle"\); busyRef\.current = false;/); // ya no está enviando; se puede reenviar
+  assert.doesNotMatch(src, /sessionRef\.current\.clave = ""/); // la clave solo la limpia runSubmit, tras el éxito
+  const sub = read("src/lib/cbSubmit.ts");
+  assert.ok(sub.indexOf('s.clave = ""') > sub.indexOf('r.kind !== "ok"')); // y solo después del bloque de fallo
 });
 
 // ---- teléfono y correo obligatorios (contrato web-01 v1.1.2)
