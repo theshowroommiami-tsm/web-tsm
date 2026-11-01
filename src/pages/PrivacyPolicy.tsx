@@ -6,6 +6,9 @@ import SEOHead from "@/components/SEOHead";
 import { pageSEO } from "@/utils/seo";
 import { BUSINESS_PHONE_DISPLAY, BUSINESS_PHONE_HREF } from "@/config/business";
 
+// Texto legal en revisión (anl-05 v1.1, §2.1, 2.2, 2.5 y 2.7): pendiente de la revisión del abogado [SC] y de la
+// aprobación de Liza y de Hikashi. No se publica antes de /custom-builds ni sin esa aprobación (anl-05 §1 y §5 (m)).
+// La Sección 5 (SMS) forma parte del registro de la campaña 10DLC y no se modifica (anl-05 §3).
 const PrivacyPolicy = () => {
   return (
     <div className="min-h-screen bg-black text-white">
@@ -30,7 +33,7 @@ const PrivacyPolicy = () => {
         <div className="max-w-4xl mx-auto">
           <div className="bg-black/50 backdrop-blur-sm border border-neon-purple/30 rounded-lg p-8 neon-border">
             <p className="text-sm text-neon-cyan mb-8 font-medium">
-              Effective Date: October 26, 2026 · Last Updated: October 26, 2026
+              Effective Date: October 26, 2026 · Last Updated: November 1, 2026
             </p>
 
             <div className="space-y-8 text-gray-300 leading-relaxed">
@@ -60,6 +63,9 @@ const PrivacyPolicy = () => {
                   <li><strong className="text-white">Communications:</strong> records of calls, texts, emails, and form submissions, including call recordings where applicable (see Section 6).</li>
                   <li><strong className="text-white">Technical information:</strong> IP address, browser type, device information, and cookies collected through our website and analytics tools.</li>
                 </ul>
+                <p className="mt-4">
+                  <strong className="text-white">Custom Builds estimate requests.</strong> If you submit the Request a Custom Build Estimate form, we collect your name, phone number, and email address; your vehicle's make, model, and year; your city or ZIP code; the service you are interested in and a description of your project; optionally, your approximate budget and timeline; and up to 3 photos that you choose to attach. We also record where your visit came from: campaign (UTM) parameters, the type and value of the Google click identifier (gclid, gbraid, or wbraid), the page you landed on, and the website that referred you. We use this information to respond to your request and to follow up with you about it, and our team is notified of each request by email. Photos can show license plates, addresses, or people; please do not upload documents or other people's personal information. For where this information is stored, who can access it, and how long we keep it, see Sections 4, 10, and 12.
+                </p>
               </div>
 
               <div>
@@ -93,15 +99,19 @@ const PrivacyPolicy = () => {
                   <li>Lenders, banks, and dealership partners, for financing applications you have submitted;</li>
                   <li>Service and repair subcontractors (e.g., independent wrap/PPF installers, towing operators, or rental partners), limited to the information needed to perform the specific service;</li>
                   <li>Payment processors, to complete transactions;</li>
-                  <li>Google (Google Analytics, Google Ads, and Google Tag Manager), for website analytics, advertising, and measuring calls from our ads (see Section 12);</li>
+                  <li>Google (Google Analytics, Google Ads, Google Tag Manager, and Google Workspace), for website analytics, advertising, and measuring calls from our ads (see Section 12), and, through Google Workspace, for storing the requests you send through our Custom Builds form (Google acts as our service provider for that storage);</li>
                   <li>RingCentral, our telephony provider, for phone service and call recording (see Section 6);</li>
                   <li>JotForm, for our repair authorization form;</li>
-                  <li>Netlify, for hosting our website;</li>
+                  <li>Netlify, for hosting our website and processing our Custom Builds form;</li>
+                  <li>Cloudflare, for the security check (Turnstile) on our Custom Builds form and for the private storage of the photos you attach to it;</li>
                   <li>Legal or regulatory authorities, where required by law, subpoena, or court order;</li>
                   <li>Professional advisors (accountants, attorneys), where necessary for business operations.</li>
                 </ul>
                 <p className="mb-4">
                   When you complete our repair authorization form on JotForm, a submission ID is passed to our confirmation page and removed from the page address before any analytics or advertising tag runs. The content of the form is not sent to Google.
+                </p>
+                <p className="mb-4">
+                  When you submit our Custom Builds estimate form, the request is processed by Netlify and saved in a Google Workspace spreadsheet that belongs to The Showroom Miami. The photos you attach are stored in private Cloudflare storage. Cloudflare Turnstile checks that the submission is not automated and may receive technical data from your browser. Only authorized personnel of The Showroom Miami can access your request and photos.
                 </p>
                 <p>
                   Any third party receiving your information is contractually or legally obligated to use it only for the purpose for which it was shared, to the extent required by applicable law.
@@ -186,6 +196,8 @@ const PrivacyPolicy = () => {
                   <li>Rental agreements and vehicle condition documentation: retained for the duration of the rental plus 3 years;</li>
                   <li>Call recordings: retained on the servers of our telephony provider, RingCentral, for 90 days;</li>
                   <li>Call logs: retained for up to 12 months;</li>
+                  <li>Custom Builds photos: retained for 12 months;</li>
+                  <li>Custom Builds requests that do not become a service: retained for 24 months;</li>
                   <li>Financing applications: retained per lender/dealer partner requirements and our internal record-keeping needs.</li>
                 </ul>
               </div>
@@ -207,7 +219,7 @@ const PrivacyPolicy = () => {
                   We use cookies and similar technologies to operate our website, remember preferences, and analyze site traffic through website analytics and advertising cookies. You can disable cookies through your browser settings, though some site features may not function properly as a result.
                 </p>
                 <p className="mb-4">
-                  <strong className="text-white">Google Analytics.</strong> We use Google Analytics 4, through Google Tag Manager, to understand how visitors use our website. It measures page views; clicks on our call buttons, including where on the site the button was clicked; that a repair authorization was completed (the fact of completion, not its content); and device, browser, and approximate location. Google Analytics uses the _ga and _ga_* cookies. Google Signals is turned off. We do not send Google any information you type on our website. To learn how Google uses this data, see{" "}
+                  <strong className="text-white">Google Analytics.</strong> We use Google Analytics 4, through Google Tag Manager, to understand how visitors use our website. It measures page views; clicks on our call buttons and on the Request a Custom Build Estimate button, including where on the site the button was clicked; that a repair authorization was completed or that a Custom Builds request was submitted (the fact, not its content); and device, browser, and approximate location. Google Analytics uses the _ga and _ga_* cookies. Google Signals is turned off. Google Analytics and Google Ads do not receive what you type into our forms or the photos you attach; requests sent through our Custom Builds form are saved in Google Workspace, as described in Section 4. To learn how Google uses this data, see{" "}
                   <a href="https://policies.google.com/technologies/partner-sites" target="_blank" rel="noopener noreferrer" className="text-neon-pink hover:text-neon-cyan transition-colors">
                     How Google uses information from sites or apps that use our services
                   </a>
@@ -218,7 +230,7 @@ const PrivacyPolicy = () => {
                   .
                 </p>
                 <p className="mb-4">
-                  <strong className="text-white">Google Ads.</strong> We use Google Ads conversion measurement to understand which of our ads lead to actions on our website. It uses the gclid (a click identifier added to the page address when you arrive from one of our ads) and the _gcl_au cookie, set through the Conversion Linker in Google Tag Manager. We may also use remarketing and personalized advertising, which means Google may show you ads for our services on other websites and apps based on your visits to our website. To opt out of personalized advertising, visit{" "}
+                  <strong className="text-white">Google Ads.</strong> We use Google Ads conversion measurement to understand which of our ads lead to actions on our website. It uses the gclid (a click identifier added to the page address when you arrive from one of our ads) and the _gcl_au cookie, set through the Conversion Linker in Google Tag Manager. A Custom Builds request or a signed repair authorization is reported to Google Ads as a fact, together with a random internal identifier (transaction ID) that is not personal data. We may also use remarketing and personalized advertising, which means Google may show you ads for our services on other websites and apps based on your visits to our website. To opt out of personalized advertising, visit{" "}
                   <a href="https://myadcenter.google.com" target="_blank" rel="noopener noreferrer" className="text-neon-pink hover:text-neon-cyan transition-colors">
                     My Ad Center
                   </a>
