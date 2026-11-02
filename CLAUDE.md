@@ -8,8 +8,6 @@ desde qué Project de Claude.ai llegó el instructivo.
 
 - Sitio web de The Showroom Miami, empresa de servicios para vehículos de
   alta gama en el sureste de Florida (showroommiami.com).
-- Código generado originalmente por Lovable.dev y sincronizado automáticamente
-  con ese proyecto — cualquier cambio acá se refleja en el sitio publicado.
 - Repositorio propiedad de un desarrollador externo (`mightworkron`); The
   Showroom Miami tiene acceso de colaborador, no de owner (transferencia de
   ownership pendiente).
