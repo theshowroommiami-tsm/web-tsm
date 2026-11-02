@@ -11,7 +11,7 @@ import { processPhoto, type ProcessedPhoto } from "@/lib/cbPhotos";
 import { clearDraft, loadDraft, newIdempotencyKey, postRequest, saveDraft, uploadPhotos } from "@/lib/cbClient";
 import { trackGenerateLead } from "@/lib/cbDataLayer";
 import {
-  CB_CONFIRMATION, CB_INTRO, CB_LOADING, CB_NOTICES, CB_PREPARING, CB_PRICE_NOTE, CB_SENDING, CB_UPLOADING, type NoticeKind,
+  CB_CONFIRMATION, CB_INTRO, CB_LOADING, CB_NOTICES, CB_PHOTO_NOTE, CB_PREPARING, CB_PRICE_NOTE, CB_PRIVACY_LEAD, CB_PRIVACY_LINK, CB_SENDING, CB_UPLOADING, type NoticeKind,
 } from "@/lib/cbCopy";
 import {
   LOADING_FOLD_MS, canSubmit, createBusyCounter, draftOf, photoFocusTarget, prepareFiles, runSubmit, sessionOf, turnstileSizeFor, type SubmitSession,
@@ -404,8 +404,9 @@ const EstimateForm = ({ className }: { className?: string }) => {
               Photos <span className="text-gray-400">(optional, up to {MAX_PHOTOS})</span>
             </label>
             <input ref={photosRef} id="cb-fotos" type="file" accept="image/*" multiple onChange={onFiles}
-              disabled={busy || preparing > 0 || atPhotoLimit} aria-describedby="cb-fotos-msg"
+              disabled={busy || preparing > 0 || atPhotoLimit} aria-describedby="cb-fotos-note cb-fotos-msg"
               className="block w-full min-h-11 scroll-mt-32 scroll-mb-28 text-base text-gray-300 file:mr-3 file:min-h-11 file:cursor-pointer file:rounded-md file:border-0 file:bg-neon-purple/30 file:px-4 file:py-2 file:text-base file:font-medium file:text-white" />
+            <p id="cb-fotos-note" className="mt-1 text-sm text-gray-400">{CB_PHOTO_NOTE}</p>
             {/* La región existe siempre (vacía) y solo cambia su texto: un role="status" que se monta ya con el texto no se anuncia. */}
             <p role="status" aria-live="polite" className="mt-1 text-sm text-neon-cyan">{preparing > 0 ? CB_PREPARING : ""}</p>
             {/* El aviso lleva el nombre del archivo, que puede ser largo y sin espacios: se parte en vez de desbordar. */}
@@ -438,6 +439,10 @@ const EstimateForm = ({ className }: { className?: string }) => {
             className="w-full scroll-mt-32 scroll-mb-28 bg-gradient-to-r from-neon-pink to-neon-purple text-white font-bold">
             {busy ? "Sending…" : "Request Estimate"}
           </Button>
+          <p className="text-sm text-gray-400 text-center">
+            {CB_PRIVACY_LEAD}{" "}
+            <a href="/privacy-policy" target="_blank" rel="noopener noreferrer" className="text-neon-cyan underline">{CB_PRIVACY_LINK}</a>.
+          </p>
          </fieldset>
         </form>
       )}

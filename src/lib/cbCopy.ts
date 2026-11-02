@@ -39,3 +39,9 @@ export const CB_PREPARING = "Preparing your photos…";
 // Aviso previo a la hidratación (también en el HTML del servidor): mientras el formulario está deshabilitado y no cargó.
 // Se dibuja con el enlace de @/config/business al final, como los avisos de fallo.
 export const CB_LOADING = "The form is loading. If it doesn't load, please call us at";
+
+// Avisos de privacidad junto al formulario (la política da por mostrado el de las fotos; anl-05 §2.7).
+export const CB_PHOTO_NOTE =
+  "Photos can show license plates, addresses, or people; please do not upload documents or other people's personal information.";
+export const CB_PRIVACY_LEAD = "By submitting, you agree to our";
+export const CB_PRIVACY_LINK = "Privacy Policy";
