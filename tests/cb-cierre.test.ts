@@ -73,7 +73,7 @@ test("A2: EstimateForm pide la marca con Other, la deja en el borrador y en el o
   assert.match(FORM, /delete raw\.marca_otra/); // el campo auxiliar no viaja: el contrato no cambia
   assert.match(FORM, /maxLength: k === "marca_otra" \? OTHER_BRAND_MAX/);
   // el borrador (set -> saveDraft) guarda todos los campos de `fields`, marca_otra incluido
-  assert.match(FORM, /const next = \{ \.\.\.prev, \[k\]: v \};[\s\S]*?saveDraft\(\{ fields: next/);
+  assert.match(FORM, /const next = \{ \.\.\.prev, \[k\]: v \};[\s\S]*?saveDraft\(draftOf\(next, sessionRef\.current\)\)/);
 });
 
 // ---- A3 · textos
@@ -243,7 +243,7 @@ test("A6: el error-callback de Turnstile y la falta de la Site Key muestran un a
   assert.match(FORM, /if \(!SITE_KEY\) \{\s*console\.error\("VITE_TURNSTILE_SITE_KEY is missing/);
   assert.match(FORM, /showNotice\("nokey", false\)/);
   assert.match(FORM, /showNotice\(SITE_KEY \? "wait" : "nokey"\)/); // sin Site Key: aviso propio, no el genérico
-  assert.match(CB_NOTICES.tserror.text, /^The security check couldn't load\. Please reload the page or call us at$/);
+  assert.match(CB_NOTICES.tserror.text, /^The security check couldn't load\. Please reload the page, or call us at$/);
 });
 
 // ---- A7 · móvil

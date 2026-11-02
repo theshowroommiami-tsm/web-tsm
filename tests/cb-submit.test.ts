@@ -26,6 +26,7 @@ const session = (): SubmitSession => ({ clave: "", failed: null });
 function fake(outcomes: SubmitOutcome[], upload?: (permiso: string, photos: ProcessedPhoto[]) => Promise<number>) {
   const calls: string[] = [];
   const posts: { clave: string; token: string; fotos: number }[] = [];
+  const fails: number[] = []; // cuántas llamadas llevaba `calls` cuando se anotó cada fallo (el borrador guarda la huella)
   let i = 0, k = 0;
   const deps: SubmitDeps = {
     postRequest: async (clave, token, _c, fotos) => { calls.push("post"); posts.push({ clave, token, fotos }); return outcomes[Math.min(i++, outcomes.length - 1)]; },
@@ -33,11 +34,12 @@ function fake(outcomes: SubmitOutcome[], upload?: (permiso: string, photos: Proc
     trackGenerateLead: (leadId, medir) => { calls.push(`lead:${leadId}:${medir}`); },
     newKey: () => `K${++k}`,
     onKeyChange: (c) => { calls.push(`key:${c}`); },
+    onAttemptFailed: () => { fails.push(calls.length); },
     resetTurnstile: () => { calls.push("reset"); },
     clearDraft: () => { calls.push("clear"); },
     onUploading: () => { calls.push("uploading"); },
   };
-  return { deps, calls, posts };
+  return { deps, calls, posts, fails };
 }
 
 // ---- F1 · el envío
@@ -77,6 +79,7 @@ test("F1: un fallo nunca llega a 'done': ni generate_lead, ni borrado de la clav
     assert.ok(!f.calls.some((c) => c.startsWith("lead:") || c === "clear" || c === "upload" || c === "uploading"), kind);
     assert.equal(s.clave, "K1", kind);
     assert.ok(s.failed, kind);
+    assert.equal(f.fails.length, 1, kind); // y el borrador se entera: guarda la huella del intento fallido
   }
   // 429, 500 y 400 no reinician Turnstile (el token se reutiliza con la misma clave); 403 y 503 sí
   for (const [kind, reset] of [["quota", false], ["error", false], ["invalid", false], ["turnstile", true], ["retry", true]] as const) {
@@ -92,6 +95,7 @@ test("F1: 201 -> un generate_lead, antes de las fotos, y después la confirmaci�
   const r = await runSubmit({ campos, token: "T", photos: [photo(1), photo(2)] }, s, f.deps);
   assert.deepEqual(r, { kind: "done", note: null });
   assert.deepEqual(f.calls, ["key:K1", "post", `lead:${LEAD}:true`, "uploading", "upload", "clear"]);
+  assert.equal(f.fails.length, 0); // un éxito no anota ningún fallo
   assert.equal(s.clave, "");
   assert.equal(s.failed, null);
   // medir false (posible duplicado) se le pasa tal cual a trackGenerateLead, que es quien decide no empujar
@@ -236,12 +240,13 @@ test("NAV-02: canSubmit bloquea mientras se hidrata, se envía o se preparan fot
     assert.equal(canSubmit({ ready, busy, preparing }), ready && !busy && !preparing);
   }
   assert.equal(CB_PREPARING, "Preparing your photos…");
-  assert.match(FORM, /canSubmit\(\{ ready, busy: busyRef\.current, preparing: preparingRef\.current > 0 \}\)/); // onSubmit
+  assert.match(FORM, /canSubmit\(\{ ready, busy: busyRef\.current, preparing: preparer\.count > 0 \}\)/); // onSubmit
   assert.match(FORM, /const canSend = canSubmit\(\{ ready, busy, preparing: preparing > 0 \}\)/);
   assert.match(FORM, /disabled=\{!canSend\}/);
-  assert.match(FORM, /\{preparing > 0 && <p role="status"[^>]*>\{CB_PREPARING\}<\/p>\}/); // el aviso junto al input
-  assert.match(FORM, /disabled=\{busy \|\| preparing > 0 \|\| photos\.length >= MAX_PHOTOS\}/); // y no se eligen más a la vez
-  assert.match(FORM, /preparingRef\.current \+= 1;[\s\S]*?finally \{\s*preparingRef\.current -= 1;/); // siempre se libera
+  assert.match(FORM, /<p role="status" aria-live="polite"[^>]*>\{preparing > 0 \? CB_PREPARING : ""\}<\/p>/); // el aviso junto al input, en una región que existe siempre
+  assert.match(FORM, /const atPhotoLimit = photos\.length >= MAX_PHOTOS;/);
+  assert.match(FORM, /disabled=\{busy \|\| preparing > 0 \|\| atPhotoLimit\}/); // y no se eligen más a la vez
+  assert.match(FORM, /await preparer\.track\(async \(\) => \{\s*const \{ added, message \} = await prepareFiles\(/); // la cuenta baja siempre (createBusyCounter, probado aparte)
 });
 
 // ---- NAV-01 · el HTML del servidor no se puede enviar
@@ -277,9 +282,11 @@ test("NAV-01: el servidor entrega el formulario con la marca nueva, el texto exa
   assert.doesNotMatch(html, /Which make\?/); // y "Which make?" solo con Other
 });
 
-test("NAV-01: el componente se habilita al hidratar (ready) y no antes", () => {
+test("NAV-01: el componente se habilita al hidratar y al terminar de plegarse el aviso (ready) y no antes", () => {
+  assert.match(FORM, /const \[hydrated, setHydrated\] = useState\(false\)/);
   assert.match(FORM, /const \[ready, setReady\] = useState\(false\)/);
-  assert.match(FORM, /useEffect\(\(\) => \{\s*setReady\(true\);/);
+  assert.match(FORM, /useEffect\(\(\) => \{\s*setHydrated\(true\);/); // al hidratar solo se marca hydrated
+  assert.match(FORM, /setTimeout\(\(\) => setReady\(true\), LOADING_FOLD_MS\)/); // y ready llega cuando el aviso terminó de plegarse
   assert.match(FORM, /<fieldset disabled=\{!ready\}/);
 });
 
@@ -288,7 +295,7 @@ test("NAV-01: el componente se habilita al hidratar (ready) y no antes", () => {
 test("A7-1 y NAV-04: el botón de enviar y el selector de fotos con margen de desplazamiento y 44 px de alto; el select con flecha propia", () => {
   const button = /<Button ref=\{submitRef\}[\s\S]*?className="([^"]+)"/.exec(FORM)?.[1].split(/\s+/) ?? [];
   for (const c of ["scroll-mt-32", "scroll-mb-28"]) assert.ok(button.includes(c), `botón: ${c}`);
-  const file = /<input id="cb-fotos"[\s\S]*?className="([^"]+)"/.exec(FORM)?.[1].split(/\s+/) ?? [];
+  const file = /<input ref=\{photosRef\} id="cb-fotos"[\s\S]*?className="([^"]+)"/.exec(FORM)?.[1].split(/\s+/) ?? [];
   for (const c of ["min-h-11", "text-base", "scroll-mt-32", "scroll-mb-28", "file:min-h-11", "file:text-base"]) assert.ok(file.includes(c), `fotos: ${c}`);
   assert.ok(!file.includes("text-sm"));
   assert.match(FORM, /className=\{cn\(inputCls, "appearance-none pr-10"\)\}/); // WebKit ignora min-height de un select nativo
@@ -306,7 +313,7 @@ test("NAV-03: CALL NOW no se dibuja mientras el formulario está en pantalla en 
   const page = read("src/pages/CustomBuilds.tsx");
   assert.match(page, /const \[mobile, setMobile\] = useState\(false\)/); // visible por defecto
   assert.match(page, /const \[formInView, setFormInView\] = useState\(false\)/);
-  assert.match(page, /new IntersectionObserver/);
+  assert.match(page, /watchInView\(form, setFormInView\)/); // el observador y su regla de la entrada más reciente viven en cbFloatingCall (probados aparte)
   assert.match(page, /\{!hideFloatingCall\(mobile, formInView\) && <FloatingCallButton \/>\}/);
 });
 

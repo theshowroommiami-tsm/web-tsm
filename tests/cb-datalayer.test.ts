@@ -5,6 +5,7 @@ import {
   bindEstimateCtaTracking, createLeadReporter, ctaLocationOf, LEAD_IDS_KEY, LEAD_IDS_MAX,
 } from "../src/lib/cbDataLayer.ts";
 import { postRequest } from "../src/lib/cbClient.ts";
+import { renderCustomBuildsHtml } from "./helpers/render-form.ts";
 
 const LEAD = "6f1c0a52-9a3e-4d0b-8f7c-2b5d4e1a9c33";
 const OTHER = "0d9b7a14-5c2e-4f68-b1a3-7e8f90c2d4a5";
@@ -37,10 +38,11 @@ function memStore() {
 const blocked = () => { throw new Error("SecurityError"); };
 
 // ---- estimate_cta_click
-test("estimate_cta_click: valores hero y after_projects; otro valor o ausente = unassigned", () => {
+test("estimate_cta_click: valores hero, after_projects y after_process; otro valor o ausente = unassigned", () => {
   assert.equal(ctaLocationOf("hero"), "hero");
   assert.equal(ctaLocationOf("after_projects"), "after_projects");
-  for (const v of [null, undefined, "", "footer", "HERO", "hero "]) assert.equal(ctaLocationOf(v), "unassigned");
+  assert.equal(ctaLocationOf("after_process"), "after_process"); // el tercero lo pidió Hikashi; ANL tiene que registrarlo
+  for (const v of [null, undefined, "", "footer", "HERO", "hero ", "after_process "]) assert.equal(ctaLocationOf(v), "unassigned");
 });
 
 test("estimate_cta_click: un clic = una entrada exacta, en captura, sin preventDefault", () => {
@@ -210,10 +212,48 @@ test("EstimateForm: generate_lead sale solo desde runSubmit (que lo prueba con d
   assert.doesNotMatch(src, /trackGenerateLead\(/);
 });
 
-test("CustomBuilds: los dos botones del estimado llevan data-cta-location hero y after_projects", () => {
-  const src = read("src/pages/CustomBuilds.tsx");
-  const anchors = [...src.matchAll(/<a href="#estimate"[^>]*>/g)].map((m) => m[0]);
-  assert.equal(anchors.length, 2);
-  assert.ok(anchors[0].includes('data-cta-location="hero"'));
-  assert.ok(anchors[1].includes('data-cta-location="after_projects"'));
+// Los botones se leen del HTML que renderiza la página de verdad (renderToString), no de su código fuente.
+const ESTIMATE_BUTTON = "Request a Custom Build Estimate";
+
+test("CustomBuilds: exactamente tres botones hacia #estimate, con hero, after_projects y after_process, en ese orden de la página", async () => {
+  const html = await renderCustomBuildsHtml();
+  const anchors = [...html.matchAll(/<a href="#estimate"([^>]*)>([\s\S]*?)<\/a>/g)];
+  assert.equal(anchors.length, 3);
+  assert.deepEqual(anchors.map((m) => /data-cta-location="([^"]*)"/.exec(m[1])?.[1]), ["hero", "after_projects", "after_process"]);
+  for (const m of anchors) assert.ok(m[2].includes(ESTIMATE_BUTTON), "mismo texto en los tres");
+  // y ninguna otra ancla de la página lleva data-cta-location (cada una emitiría un estimate_cta_click)
+  assert.equal((html.match(/data-cta-location=/g) ?? []).length, 3);
+});
+
+test("CustomBuilds: el botón de Our Process va después de los cuatro pasos, dentro de la misma sección, centrado y con margen", async () => {
+  const html = await renderCustomBuildsHtml();
+  const from = html.indexOf("Our Process");
+  assert.ok(from > 0);
+  const section = html.slice(from, html.indexOf("</section>", from));
+  const steps = ["Consultation", "Design", "Build", "Reveal"].map((t) => section.indexOf(`>${t}</h3>`));
+  assert.ok(steps.every((i) => i > 0) && steps.every((i, n) => n === 0 || i > steps[n - 1]), "los cuatro pasos, en orden");
+  const cta = section.indexOf('data-cta-location="after_process"');
+  assert.ok(cta > steps[3], "el botón queda después del cuarto paso");
+  assert.equal((section.match(/data-cta-location=/g) ?? []).length, 1); // y es el único de la sección
+  const wrapper = /<div class="([^"]*)"><a href="#estimate"[^>]*data-cta-location="after_process"/.exec(section)?.[1].split(/\s+/) ?? [];
+  assert.ok(wrapper.includes("text-center") && wrapper.includes("mt-12"), `contenedor: ${wrapper.join(" ")}`);
+  const button = /data-cta-location="after_process"[^>]*><button class="([^"]*)"/.exec(section)?.[1] ?? "";
+  for (const c of ["border-neon-cyan", "text-neon-cyan", "font-bold", "px-8", "py-4", "rounded-lg"]) assert.ok(button.split(/\s+/).includes(c), c);
+  assert.doesNotMatch(button, /bg-gradient/); // outline, igual que el de después de los proyectos
+});
+
+test("CustomBuilds: cada uno de los tres clics empuja UN estimate_cta_click con su cta_location y solo service y cta_location", async () => {
+  const html = await renderCustomBuildsHtml();
+  const locs = [...html.matchAll(/<a href="#estimate"[^>]*data-cta-location="([^"]*)"/g)].map((m) => m[1]);
+  assert.deepEqual(locs, ["hero", "after_projects", "after_process"]);
+  const doc = fakeDocument();
+  const host: { dataLayer?: Record<string, unknown>[] } = {};
+  bindEstimateCtaTracking(doc, host);
+  for (const [n, loc] of locs.entries()) {
+    const r = doc.click(child(el(loc))); // el clic cae en el botón o en su texto: closest() resuelve al ancla marcada
+    assert.equal(host.dataLayer!.length, n + 1, `un clic = una entrada (${loc})`);
+    assert.deepEqual(host.dataLayer![n], { event: "estimate_cta_click", service: "custom_builds", cta_location: loc });
+    assert.deepEqual(Object.keys(host.dataLayer![n]).sort(), ["cta_location", "event", "service"]);
+    assert.equal(r.prevented, false);
+  }
 });

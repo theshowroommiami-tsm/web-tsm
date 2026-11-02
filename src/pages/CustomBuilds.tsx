@@ -12,7 +12,7 @@ import SolutionSection from "@/components/conversion/SolutionSection";
 import SocialProof from "@/components/conversion/SocialProof";
 import FAQSection from "@/components/conversion/FAQSection";
 import EstimateForm, { ESTIMATE_SECTION_ID, goToEstimate } from "@/components/custom-builds/EstimateForm";
-import { MOBILE_QUERY, hideFloatingCall } from "@/lib/cbFloatingCall";
+import { MOBILE_QUERY, hideFloatingCall, watchInView } from "@/lib/cbFloatingCall";
 import { BUSINESS_PHONE_DISPLAY, BUSINESS_PHONE_HREF } from "@/config/business";
 
 const CustomBuilds = () => {
@@ -25,11 +25,8 @@ const CustomBuilds = () => {
     onChange();
     mq?.addEventListener?.("change", onChange);
     const form = document.getElementById(ESTIMATE_SECTION_ID);
-    const io = form && typeof IntersectionObserver !== "undefined"
-      ? new IntersectionObserver(([entry]) => setFormInView(entry.isIntersecting))
-      : null;
-    if (io && form) io.observe(form);
-    return () => { mq?.removeEventListener?.("change", onChange); io?.disconnect(); };
+    const stopWatching = form ? watchInView(form, setFormInView) : undefined; // cuenta la entrada más reciente de cada lote
+    return () => { mq?.removeEventListener?.("change", onChange); stopWatching?.(); };
   }, []);
 
   const customFeatures = ["Performance upgrades and modifications", "Luxury interior customization", "Custom paint and graphic work", "Suspension and handling upgrades", "Audio system integration", "Body kit installation"];
@@ -308,6 +305,13 @@ const CustomBuilds = () => {
                     <p className="text-gray-300">{item.desc}</p>
                   </div>
                 ))}
+              </div>
+              <div className="text-center mt-12">
+                <a href="#estimate" onClick={goToEstimate} data-cta-location="after_process">
+                  <Button size="lg" variant="outline" className="border-neon-cyan text-neon-cyan font-bold px-8 py-4 rounded-lg">
+                    Request a Custom Build Estimate
+                  </Button>
+                </a>
               </div>
             </div>
           </section>

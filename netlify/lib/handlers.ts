@@ -106,6 +106,20 @@ function receptorFail(d: Deps, accion: "crear" | "fotos", r: Extract<ReceptorRes
   return fail(status, status === 503 ? "unavailable" : status === 429 ? "quota" : status === 409 ? "conflict" : status === 400 ? "invalid" : "config");
 }
 
+/**
+ * Resultado de la verificación de Turnstile: null solo si es exactamente "ok". "rejected" es 403; "unavailable" (Cloudflare
+ * caído o lento, o un secret inválido: no es quien envía) y cualquier otro valor o forma inesperada son 503 reintentable
+ * con una línea CB_ALERT fija. Falla cerrada: lo que no se reconoce no avanza.
+ */
+export function humanGate(d: Deps, human: unknown): Response | null {
+  const outcome = (human as { outcome?: unknown } | null | undefined)?.outcome;
+  if (outcome === "ok") return null;
+  if (outcome === "rejected") return fail(403, "turnstile");
+  const cause = outcome === "unavailable" ? safeCause(String((human as { cause?: unknown }).cause ?? "")) : "desconocida";
+  d.log?.(`CB_ALERT turnstile causa=${cause}`);
+  return fail(503, "unavailable");
+}
+
 export async function handleRequest(req: Request, d: Deps): Promise<Response> {
   if (req.method !== "POST") return fail(405, "method");
   const bad = configFail(d, "cb-request");
@@ -123,12 +137,8 @@ export async function handleRequest(req: Request, d: Deps): Promise<Response> {
   const entorno = d.entorno as Entorno; // configFail ya descartó el null
   const token = typeof body.token === "string" ? body.token : "";
   const human = await checkTurnstile({ entorno, secret: d.turnstileSecret }, token, clave, d.fetchImpl);
-  if (human.outcome === "unavailable") {
-    // No es quien envía: Cloudflare caído o lento, o un secret inválido. 503 reintentable, no "verify you're human".
-    d.log?.(`CB_ALERT turnstile causa=${human.cause}`);
-    return fail(503, "unavailable");
-  }
-  if (human.outcome === "rejected") return fail(403, "turnstile");
+  const blocked = humanGate(d, human);
+  if (blocked) return blocked;
 
   const r = await callReceptor(
     { url: d.receptor.url, secret: d.receptor.secret, entorno },

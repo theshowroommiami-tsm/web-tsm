@@ -2,7 +2,8 @@
 // Sin datos personales: estimate_cta_click lleva service y cta_location; generate_lead, service y lead_id.
 
 export const CB_SERVICE = "custom_builds";
-export const CTA_LOCATIONS = ["hero", "after_projects"];
+// hero y after_projects son los de anl-06; after_process lo pidió Hikashi (2026-11-01) y ANL tiene que registrarlo.
+export const CTA_LOCATIONS = ["hero", "after_projects", "after_process"];
 export const LEAD_IDS_KEY = "tsm_cb_lead_ids";
 export const LEAD_IDS_MAX = 20;
 

@@ -11,6 +11,13 @@ export type Attribution = {
   aterrizaje?: string; referrer?: string;
 };
 
+/**
+ * Los campos del envío que salen de la atribución (no los escribe el usuario): en MAX_LEN, desde "origen" hasta el
+ * final. Si el contrato suma un campo del usuario, va ANTES de "origen"; la prueba fija la lista literal.
+ */
+const SCHEMA_KEYS = Object.keys(MAX_LEN);
+export const ATTRIBUTION_FIELDS: readonly string[] = SCHEMA_KEYS.slice(SCHEMA_KEYS.indexOf("origen"));
+
 export type StoredAttribution = { savedAt: number; data: Attribution };
 
 export function referrerHost(referrer: string, ownHost: string): string {

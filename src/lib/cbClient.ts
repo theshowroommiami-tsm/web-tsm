@@ -4,12 +4,20 @@ import type { ProcessedPhoto } from "./cbPhotos.ts";
 
 const DRAFT_KEY = "tsm_cb_draft";
 
-export type Draft = { fields: Record<string, string>; clave: string };
+/**
+ * `huella` es la del último intento que falló con esta clave (ver fingerprint en cbSubmit). Sin ella, tras recargar la
+ * página una corrección reusaría la clave y el receptor devolvería la fila original: la corrección se perdería en
+ * silencio. Los borradores viejos no la traen y cargan igual.
+ */
+export type Draft = { fields: Record<string, string>; clave: string; huella?: string };
+
+const HUELLA_MAX = 50_000; // la huella es el JSON de los campos: sobra para el máximo de cada uno
 
 /**
  * Borrador de la sesión. Se queda solo con las entradas cuyo valor es texto: un valor de otro tipo (borrador viejo o
  * manipulado) hacía lanzar TypeError a normalizePhone al enviar. Una clave que no es UUID v4 se descarta: el servidor
- * la rechazaría con 400 y el usuario quedaría atascado; sin clave, el formulario crea una nueva.
+ * la rechazaría con 400 y el usuario quedaría atascado; sin clave, el formulario crea una nueva (y una huella sin clave
+ * no significa nada, así que también se descarta).
  */
 export function loadDraft(): Draft | null {
   try {
@@ -17,11 +25,12 @@ export function loadDraft(): Draft | null {
     if (!raw) return null;
     const j = JSON.parse(raw) as unknown;
     if (!j || typeof j !== "object" || Array.isArray(j)) return null;
-    const { fields, clave } = j as { fields?: unknown; clave?: unknown };
+    const { fields, clave, huella } = j as { fields?: unknown; clave?: unknown; huella?: unknown };
     if (!fields || typeof fields !== "object" || Array.isArray(fields)) return null;
     const clean: Record<string, string> = {};
     for (const [k, v] of Object.entries(fields)) if (typeof v === "string") clean[k] = v;
-    return { fields: clean, clave: isUuidV4(clave) ? clave : "" };
+    if (!isUuidV4(clave)) return { fields: clean, clave: "" };
+    return typeof huella === "string" && huella && huella.length <= HUELLA_MAX ? { fields: clean, clave, huella } : { fields: clean, clave };
   } catch { return null; }
 }
 export function saveDraft(d: Draft) {

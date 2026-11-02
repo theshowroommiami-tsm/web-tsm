@@ -1,9 +1,9 @@
 import { handleRequest } from "../lib/handlers.ts";
-import { depsFromEnv } from "../lib/env.ts";
+import { depsForRequest } from "../lib/env.ts";
 
-// context.deploy.context: contexto del despliegue (production, deploy-preview...). CB_ENTORNO no puede contradecirlo.
+// CB_ENTORNO no puede contradecir el contexto del despliegue (context.deploy.context) ni el anfitrión de la petición.
 export default async (req: Request, context?: { deploy?: { context?: string } }) =>
-  handleRequest(req, depsFromEnv(context?.deploy?.context));
+  handleRequest(req, depsForRequest(req, context));
 
 export const config = {
   path: "/api/cb-request",

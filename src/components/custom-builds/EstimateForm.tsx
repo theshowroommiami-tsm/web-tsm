@@ -11,9 +11,11 @@ import { processPhoto, type ProcessedPhoto } from "@/lib/cbPhotos";
 import { clearDraft, loadDraft, newIdempotencyKey, postRequest, saveDraft, uploadPhotos } from "@/lib/cbClient";
 import { trackGenerateLead } from "@/lib/cbDataLayer";
 import {
-  CB_CONFIRMATION, CB_INTRO, CB_NOTICES, CB_PREPARING, CB_PRICE_NOTE, CB_SENDING, CB_UPLOADING, type NoticeKind,
+  CB_CONFIRMATION, CB_INTRO, CB_LOADING, CB_NOTICES, CB_PREPARING, CB_PRICE_NOTE, CB_SENDING, CB_UPLOADING, type NoticeKind,
 } from "@/lib/cbCopy";
-import { canSubmit, prepareFiles, runSubmit, turnstileSizeFor, type SubmitSession } from "@/lib/cbSubmit";
+import {
+  LOADING_FOLD_MS, canSubmit, createBusyCounter, draftOf, photoFocusTarget, prepareFiles, runSubmit, sessionOf, turnstileSizeFor, type SubmitSession,
+} from "@/lib/cbSubmit";
 import { BUSINESS_PHONE_DISPLAY, BUSINESS_PHONE_HREF } from "@/config/business";
 
 export const ESTIMATE_SECTION_ID = "estimate";
@@ -65,7 +67,14 @@ const FieldWrap = ({ k, label, required, error, children }: { k: string; label: 
   </div>
 );
 
-/** Texto del aviso y, si corresponde, el teléfono del negocio (siempre de @/config/business) como enlace de llamada. */
+/** El teléfono del negocio (siempre de @/config/business) como enlace de llamada. */
+const PhoneLink = () => (
+  <a href={BUSINESS_PHONE_HREF} data-call-location="page_body" className="font-semibold underline whitespace-nowrap">
+    {BUSINESS_PHONE_DISPLAY}
+  </a>
+);
+
+/** Texto del aviso y, si corresponde, el teléfono del negocio como enlace de llamada. */
 const NoticeText = ({ kind }: { kind: NoticeKind }) => {
   const n = CB_NOTICES[kind];
   return (
@@ -74,13 +83,38 @@ const NoticeText = ({ kind }: { kind: NoticeKind }) => {
       {n.phone && (
         <>
           {" "}
-          <a href={BUSINESS_PHONE_HREF} data-call-location="page_body" className="font-semibold underline whitespace-nowrap">
-            {BUSINESS_PHONE_DISPLAY}
-          </a>
+          <PhoneLink />
           .
         </>
       )}
     </>
+  );
+};
+
+/**
+ * Aviso mientras el formulario no está listo. Sin JavaScript, con el bundle bloqueado o antes de hidratar los controles
+ * están deshabilitados y el formulario no dice por qué: esta línea (que también sale en el HTML del servidor) da el
+ * teléfono. Al hidratar se pliega en LOADING_FOLD_MS (la altura baja a 0 en vez de saltar) y se quita; los controles se
+ * habilitan cuando termina (EstimateForm), para que ningún toque caiga sobre un campo que todavía sube. Va fuera del
+ * fieldset: no es un control.
+ */
+export const LoadingNotice = ({ ready }: { ready: boolean }) => {
+  const [gone, setGone] = useState(ready); // montado ya listo: no hay nada que mostrar
+  useEffect(() => {
+    if (!ready) return;
+    const t = setTimeout(() => setGone(true), LOADING_FOLD_MS);
+    return () => clearTimeout(t);
+  }, [ready]);
+  if (gone) return null;
+  return (
+    <div
+      aria-hidden={ready || undefined}
+      className={cn("grid transition-[grid-template-rows,opacity] duration-300 motion-reduce:transition-none", ready ? "grid-rows-[0fr] opacity-0" : "grid-rows-[1fr] opacity-100")}
+    >
+      <div className="overflow-hidden">
+        <p className="pb-5 text-sm text-gray-300">{CB_LOADING} <PhoneLink />.</p>
+      </div>
+    </div>
   );
 };
 
@@ -93,18 +127,23 @@ const EstimateForm = ({ className }: { className?: string }) => {
   const [status, setStatus] = useState<Status>("idle");
   const [notice, setNotice] = useState<{ kind: NoticeKind } | null>(null);
   const [token, setToken] = useState("");
-  // El HTML que sirve el servidor no se puede enviar: los controles quedan deshabilitados hasta que la página hidrata.
-  // Sin JavaScript (o antes de hidratar) el envío nativo sería un GET con los datos del cliente en la URL.
+  // El HTML que sirve el servidor no se puede enviar: los controles quedan deshabilitados hasta que la página hidrata Y el
+  // aviso previo termina de plegarse. Sin JavaScript (o antes de hidratar) el envío nativo sería un GET con los datos del
+  // cliente en la URL.
+  const [hydrated, setHydrated] = useState(false);
   const [ready, setReady] = useState(false);
   const [preparing, setPreparing] = useState(0); // fotos que se están recodificando
-  const preparingRef = useRef(0);
-  const sessionRef = useRef<SubmitSession>({ clave: "", failed: null }); // clave de idempotencia y último fallo
+  const [preparer] = useState(() => createBusyCounter(setPreparing)); // su cuenta baja siempre, también si una foto no termina
+  const wasPreparing = useRef(false);
+  const sessionRef = useRef<SubmitSession>({ clave: "", failed: null }); // clave de idempotencia y último fallo (también en el borrador)
   const busyRef = useRef(false);
   const tsEl = useRef<HTMLDivElement>(null);
   const tsId = useRef<string>();
   const formRef = useRef<HTMLFormElement>(null);
   const noticeRef = useRef<HTMLDivElement>(null);
   const submitRef = useRef<HTMLButtonElement>(null);
+  const photosRef = useRef<HTMLInputElement>(null);
+  const photoListRef = useRef<HTMLUListElement>(null);
   const doneRef = useRef<HTMLDivElement>(null);
   const scrollNoticeRef = useRef(false);
 
@@ -116,10 +155,17 @@ const EstimateForm = ({ className }: { className?: string }) => {
 
   // Borrador de la sesión (solo en el navegador, después de hidratar).
   useEffect(() => {
-    setReady(true);
+    setHydrated(true);
     const d = loadDraft();
-    if (d) { setFields(d.fields); sessionRef.current.clave = d.clave; }
+    if (d) { setFields(d.fields); sessionRef.current = sessionOf(d); } // la clave y la huella del último fallo sobreviven a la recarga
   }, []);
+
+  // Los controles se habilitan cuando el aviso previo terminó de plegarse (los campos dejan de subir).
+  useEffect(() => {
+    if (!hydrated) return;
+    const t = setTimeout(() => setReady(true), LOADING_FOLD_MS);
+    return () => clearTimeout(t);
+  }, [hydrated]);
 
   // Turnstile, acción cb_request. El widget compacto (150 px) entra donde el normal (300 px) no cabe, p. ej. 320 y 360 px.
   useEffect(() => {
@@ -185,6 +231,16 @@ const EstimateForm = ({ className }: { className?: string }) => {
     submitRef.current?.focus({ preventScroll: true });
   }, [notice]);
 
+  // Al deshabilitarse el selector de fotos mientras se preparan, el navegador suelta el foco en BODY: al terminar vuelve al
+  // selector, o a la lista de fotos si el tope lo dejó deshabilitado (el siguiente Tab llega a "Remove photo 1").
+  const atPhotoLimit = photos.length >= MAX_PHOTOS;
+  useEffect(() => {
+    if (preparing > 0) { wasPreparing.current = true; return; }
+    if (!wasPreparing.current) return;
+    wasPreparing.current = false;
+    photoFocusTarget(document.activeElement, document.body, photosRef.current, atPhotoLimit ? photoListRef.current : null)?.focus({ preventScroll: true });
+  }, [preparing, atPhotoLimit]);
+
   // Al terminar bien, el foco va a la confirmación (role="status") y el lector de pantalla la lee.
   useEffect(() => {
     if (status === "done") doneRef.current?.focus();
@@ -194,7 +250,7 @@ const EstimateForm = ({ className }: { className?: string }) => {
     setFields((prev) => {
       const next = { ...prev, [k]: v };
       if (!sessionRef.current.clave) sessionRef.current.clave = newIdempotencyKey();
-      saveDraft({ fields: next, clave: sessionRef.current.clave });
+      saveDraft(draftOf(next, sessionRef.current));
       return next;
     });
     if (errors[k] || (k === "marca" && errors.marca_otra)) {
@@ -207,14 +263,11 @@ const EstimateForm = ({ className }: { className?: string }) => {
     e.target.value = "";
     setPhotoMsg("");
     // Recodificar tarda: mientras tanto el botón de enviar espera (si no, la solicitud saldría sin las fotos).
-    preparingRef.current += 1; setPreparing(preparingRef.current);
-    try {
+    await preparer.track(async () => {
       const { added, message } = await prepareFiles(list, MAX_PHOTOS - photos.length, MAX_PHOTOS, (f) => processPhoto(f as File));
       setPhotoMsg(message);
       setPhotos((p) => [...p, ...added].slice(0, MAX_PHOTOS));
-    } finally {
-      preparingRef.current -= 1; setPreparing(preparingRef.current);
-    }
+    });
   };
   const removePhoto = (i: number) => setPhotos((p) => { URL.revokeObjectURL(p[i].previewUrl); return p.filter((_, j) => j !== i); });
 
@@ -231,7 +284,7 @@ const EstimateForm = ({ className }: { className?: string }) => {
 
   const onSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!canSubmit({ ready, busy: busyRef.current, preparing: preparingRef.current > 0 })) return; // doble clic, o fotos aún en proceso
+    if (!canSubmit({ ready, busy: busyRef.current, preparing: preparer.count > 0 })) return; // doble clic, o fotos aún en proceso
     const otherErr = otherBrandError(fields.marca ?? "", fields.marca_otra ?? ""); // "Which make?" con Other
     const raw: Record<string, string> = {
       ...fields,
@@ -264,7 +317,8 @@ const EstimateForm = ({ className }: { className?: string }) => {
       uploadPhotos,
       trackGenerateLead,
       newKey: newIdempotencyKey,
-      onKeyChange: (clave) => saveDraft({ fields, clave }),
+      onKeyChange: () => saveDraft(draftOf(fields, sessionRef.current)),
+      onAttemptFailed: () => saveDraft(draftOf(fields, sessionRef.current)),
       resetTurnstile: () => { window.turnstile?.reset(tsId.current); setToken(""); },
       clearDraft,
       onUploading: () => setStatus("uploading"),
@@ -320,6 +374,7 @@ const EstimateForm = ({ className }: { className?: string }) => {
         </div>
       ) : (
         <form ref={formRef} method="post" onSubmit={onSubmit} noValidate className="rounded-lg border border-neon-purple/30 bg-card p-4 min-[400px]:p-6 sm:p-8">
+         <LoadingNotice ready={hydrated} />
          <fieldset disabled={!ready} className="m-0 min-w-0 space-y-5 border-0 p-0">
           <FieldWrap error={errors.nombre} k="nombre" label="Full name" required><input type="text" autoComplete="name" {...common("nombre", true)} /></FieldWrap>
           <div className={CONTACT}>
@@ -344,17 +399,19 @@ const EstimateForm = ({ className }: { className?: string }) => {
             <FieldWrap error={errors.plazo} k="plazo" label="Timeline">{select("plazo", TIMELINES)}</FieldWrap>
           </div>
 
-          <div>
+          <div className="min-w-0">
             <label htmlFor="cb-fotos" className="block text-sm font-medium text-gray-200 mb-1">
               Photos <span className="text-gray-400">(optional, up to {MAX_PHOTOS})</span>
             </label>
-            <input id="cb-fotos" type="file" accept="image/*" multiple onChange={onFiles}
-              disabled={busy || preparing > 0 || photos.length >= MAX_PHOTOS} aria-describedby="cb-fotos-msg"
+            <input ref={photosRef} id="cb-fotos" type="file" accept="image/*" multiple onChange={onFiles}
+              disabled={busy || preparing > 0 || atPhotoLimit} aria-describedby="cb-fotos-msg"
               className="block w-full min-h-11 scroll-mt-32 scroll-mb-28 text-base text-gray-300 file:mr-3 file:min-h-11 file:cursor-pointer file:rounded-md file:border-0 file:bg-neon-purple/30 file:px-4 file:py-2 file:text-base file:font-medium file:text-white" />
-            {preparing > 0 && <p role="status" className="mt-1 text-sm text-neon-cyan">{CB_PREPARING}</p>}
-            <p id="cb-fotos-msg" className="mt-1 text-sm text-red-400" aria-live="polite">{photoMsg}</p>
+            {/* La región existe siempre (vacía) y solo cambia su texto: un role="status" que se monta ya con el texto no se anuncia. */}
+            <p role="status" aria-live="polite" className="mt-1 text-sm text-neon-cyan">{preparing > 0 ? CB_PREPARING : ""}</p>
+            {/* El aviso lleva el nombre del archivo, que puede ser largo y sin espacios: se parte en vez de desbordar. */}
+            <p id="cb-fotos-msg" className="mt-1 break-words text-sm text-red-400" aria-live="polite">{photoMsg}</p>
             {photos.length > 0 && (
-              <ul className="mt-3 flex gap-3 flex-wrap">
+              <ul ref={photoListRef} tabIndex={-1} className="mt-3 flex gap-3 flex-wrap focus:outline-none">
                 {photos.map((p, i) => (
                   <li key={p.previewUrl} className="relative">
                     <img src={p.previewUrl} alt={`Selected photo ${i + 1}`} className="h-20 w-20 rounded object-cover" />

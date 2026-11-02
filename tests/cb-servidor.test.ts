@@ -98,13 +98,8 @@ test("SRV-02: los despliegues correctos siguen funcionando (production en produc
   assert.deepEqual(configProblems(cruzado), ["CB_ENTORNO(contexto)"]);
 });
 
-test("SRV-02: las Functions pasan context.deploy.context a depsFromEnv", async () => {
-  const { readFileSync } = await import("node:fs");
-  for (const f of ["cb-request", "cb-photo-urls", "cb-photos-done"]) {
-    const src = readFileSync(new URL(`../netlify/functions/${f}.ts`, import.meta.url), "utf8");
-    assert.match(src, /depsFromEnv\(context\?\.deploy\?\.context\)/, f);
-  }
-});
+// El paso del contexto (y del anfitrión) a la configuración de las tres Functions se prueba en tests/cb-ronda3.test.ts
+// llamando a las Functions de verdad, no leyendo su código.
 
 // ---- SRV-01 · variables, secret de prueba en producción
 
